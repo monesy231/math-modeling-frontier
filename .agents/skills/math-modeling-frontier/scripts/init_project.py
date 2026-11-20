@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+"""
+Initialize a contest-agnostic mathematical modeling workspace with O(1) Layered
+Relay Memory for Flagship ([F]) <-> Workhorse ([W]) model switching:
+  - handoff.md  (HOT, <=60 lines, overwritten on every model switch)
+  - 00_plan.md  (CANONICAL, read on demand: live rules, Q1->Qn spine, Nomenclature, Gates)
+  - 01_log.md   (COLD, append-only, never preloaded: EDA provenance, dead ends, audit trail)
+
+Usage:
+    python init_project.py <project_dir> --contest "2026 APMCM" --lang en --title "Problem A"
+"""
+from __future__ import annotations
+
+import argparse
+import shutil
+import sys
+from datetime import datetime
+from pathlib import Path
+
+
+def write_if_allowed(path: Path, content: str, force: bool) -> str:
+    if path.exists() and not force:
+        return f"[SKIP]   {path} (already exists)"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return f"[CREATE] {path}"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Scaffold a dual-tier frontier mathematical modeling workspace."
+    )
+    parser.add_argument("project_dir", type=str, help="Target project root directory")
+    parser.add_argument(
+        "--contest",
+        "-c",
+        default="[EXTRACT FROM 00_problem/]",
+        help="Contest name & year (e.g., '2026 APMCM')",
+    )
+    parser.add_argument(
+        "--lang",
+        "-l",
+        choices=["en", "zh"],
+        default="en",
+        help="Primary paper language (en or zh, default: en)",
+    )
+    parser.add_argument(
+        "--title",
+        "-t",
+        default="[TBD Problem Track / Title]",
+        help="Short problem label (e.g., 'Problem A')",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing starter markdown/style files if present",
+    )
+    args = parser.parse_args()
+
+    root = Path(args.project_dir).resolve()
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    for d in [
+        root / "00_problem",
+        root / "01_data" / "raw",
+        root / "01_data" / "clean",
+        root / "02_src",
+        root / "03_outputs" / "metrics",
+        root / "03_outputs" / "figs",
+        root / "04_paper",
+    ]:
+        d.mkdir(parents=True, exist_ok=True)
+
+    # Copy plot_style.py from skill scripts directory
+    skill_plot_style = Path(__file__).resolve().parent / "plot_style.py"
+    dest_plot_style = root / "02_src" / "plot_style.py"
+    if skill_plot_style.exists():
+        if not dest_plot_style.exists() or args.force:
+            shutil.copy2(skill_plot_style, dest_plot_style)
+            print(f"[COPY]   {dest_plot_style}")
+        else:
+            print(f"[SKIP]   {dest_plot_style} (already exists)")
+    else:
+        print(f"[WARN]   plot_style.py not found next to init_project.py at {skill_plot_style}")
+
+    problem_files = sorted(p.name for p in (root / "00_problem").iterdir() if p.is_file())
+    problem_listing = ", ".join(problem_files) if problem_files else "[Drop latest official files into 00_problem/]"
+
+    handoff_md = f"""# handoff.md — HOT Relay Packet (OVERWRITE every switch | HARD CAP <= 60 lines)
+
+- **Updated**: {now_str}
+- **Current Step**: `Step 0 -> Step 1`
+- **Next Role**: `[F] Flagship` (Problem Selection, EDA Review & Formulation -> Gate M)
+- **Deadline Guard (<8h)?**: `NO`
+
+## Active Task (Next Turn Only)
+1. Extract live contest rules from `00_problem/` into `00_plan.md` Sec. 0.
+2. Inspect raw data summary in `01_data/raw/` and log statistical premises in `01_log.md`.
+3. Self-play 2–3 distinct paradigms, lock `Q1 -> Qn` spine & Baseline route in `00_plan.md`, then pause at **Gate M**.
+
+## File Pointers (Read On Demand — Never Paste Raw Data Here)
+- Problem & official rules: `00_problem/` ({problem_listing})
+- Raw data: `01_data/raw/`
+- Canonical plan & symbols: `00_plan.md`
+- Verified metrics: `03_outputs/metrics/` (none yet)
+- Verified figures: `03_outputs/figs/` (none yet)
+
+## Verified Headline Facts
+- Workspace initialized (`{args.contest}` | `{args.lang.upper()}`).
+
+## Open Blockers / Do-Not-Repeat (Max 3 Items)
+- None yet.
+"""
+
+    plan_md = f"""# 00_plan.md — Canonical Rules, Math Spine, Nomenclature & Gates (Read On Demand)
+
+- **Initialized**: {now_str} | **Contest**: {args.contest} | **Problem**: {args.title} | **Lang**: {args.lang.upper()}
+
+## 0. Live Official Rules (Extracted from `00_problem/` — mark absent items `[待核验]`)
+- **Format & Template**: `[EXTRACT FROM 00_problem/]`
+- **Deadline / Window**: `[EXTRACT FROM 00_problem/]`
+- **Hard Page / Word Limit**: `[EXTRACT FROM 00_problem/]`
+- **Anonymity & Metadata**: `[EXTRACT FROM 00_problem/]`
+- **AI Declaration Policy**: `[EXTRACT FROM 00_problem/]`
+- **Required Extras (Memo / Code / Data / Plagiarism)**: `[EXTRACT FROM 00_problem/]`
+
+## 1. Workflow Gate Tracker (Step 0 -> Step 6)
+
+| Step & Gate | Owner | Scope | Status | Evidence Pointer |
+| :--- | :--- | :--- | :--- | :--- |
+| **Step 0 · Setup** | `[W]` | Workspace + live rules from `00_problem/` | `IN_PROGRESS` | `00_plan.md` |
+| **Step 1 · Gate M** | `[F]` | Track choice, EDA, 2–3 paradigm self-play, HIL sign-off | `PENDING` | `00_plan.md`, `01_log.md` |
+| **Step 2 · Gate P1** | `[W]` | Reproducible cleaning + full `Q1->Qn` Baseline + commit | `PENDING` | `03_outputs/metrics/baseline.json` |
+| **Step 3 · Gate P2** | `[W]` | Upgrades, comparison, sensitivity, verified visuals + commit | `PENDING` | `03_outputs/metrics/`, `figs/` |
+| **Step 4 · Gate R** | `[F]` | **Pre-Writing Technical Audit** (math/physics/metrics pass) | `PENDING` | `handoff.md` |
+| **Step 5 · W-Draft** | `[W/F]` | Isolated press-conference draft + compiled PDF | `PENDING` | `04_paper/` |
+| **Step 6 · W-Audit** | `[F]` | Independent read-only Stage 1 + Stage 2 audit + seal | `PENDING` | Audit report |
+
+## 2. Coherent `Q1 -> Qn` Math Spine & Baseline Route
+- **Q1**: [Core white-box mechanism & state variables]
+- **Q2**: [Coupled / upgraded formulation inheriting Q1]
+- **Q3**: [Stochastic / sensitivity / policy extension]
+- **Global Baseline Path (Gate P1)**: [Minimal end-to-end `Q1 -> Qn` script chain]
+
+## 3. Actor-Critic Paradigm Trade-Off
+| Paradigm | Core Idea | Fatal Assumption / Data Risk | Verdict |
+| :--- | :--- | :--- | :--- |
+| A | | | |
+| B | | | |
+| C | | | |
+
+## 4. Operational Assumptions & Unified Nomenclature
+| ID | Assumption + Justification | Eq. Hook | Relaxation / Sensitivity Test |
+| :--- | :--- | :--- | :--- |
+| A1 | | | |
+
+| Symbol | Definition | Unit / Domain | First Used |
+| :--- | :--- | :--- | :--- |
+| $t$ | Time index | - | Sec. 3 |
+
+## 5. Experiment Duty Matrix
+| Exp | Duty | Design / Sweep | Metric Pointer (`03_outputs/metrics/`) | Fig / Table |
+| :--- | :--- | :--- | :--- | :--- |
+| E1 | Premise Check | Normality / VIF / Stationarity | `eda_diagnostics.json` | Fig. 1 / Tab. 1 |
+| E2 | Baseline vs. Proposed | Identical split + 95% CI | `model_comparison.json` | Tab. 2 / Fig. 3 |
+| E3 | Ablation / Mechanism | Remove custom module | `ablation.json` | Tab. 2 |
+| E4 | Sensitivity (±5%, ±10%) | Top parameters + stress test | `sensitivity.json` | Fig. 5 / Fig. 6 |
+"""
+
+    log_md = f"""# 01_log.md — Cold Archival Ledger (Append-Only — NEVER Preload Into Normal Turns)
+
+- **Project**: {args.contest} — {args.title} | **Created**: {now_str}
+
+## 1. EDA & Statistical Premise Diagnostics
+- **Raw Data (`01_data/raw/`)**: [Filenames, shapes, missing rates]
+- **Premise Tests**: [Normality / VIF / ADF / outlier rule]
+
+## 2. External Data & Literature Provenance (Verifiable Real Sources Only)
+- [Source / DOI / URL / retrieval date]
+
+## 3. Dynamic Pivots & 3-Attempt Circuit-Breaker Archive (Internal Only — NEVER Narrate in Paper)
+| Timestamp | Sub-Problem | Root Cause | Attempts (#1-#3) | Pivot (`L2`/`L3`) | Positive Paper Framing |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| - | - | - | - | - | - |
+"""
+
+    gitignore = """# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+*.nav
+*.snm
+
+# Audit scratch renders
+03_outputs/_audit_pages/
+
+# OS
+.DS_Store
+Thumbs.db
+"""
+
+    for target, content in [
+        (root / "handoff.md", handoff_md),
+        (root / "00_plan.md", plan_md),
+        (root / "01_log.md", log_md),
+        (root / ".gitignore", gitignore),
+    ]:
+        print(write_if_allowed(target, content, args.force))
+
+    print(f"\n[DONE] Dual-tier workspace ready at: {root}")
+    print(f"       Hot relay: handoff.md (<=60 lines) | Canonical: 00_plan.md | Cold: 01_log.md")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
