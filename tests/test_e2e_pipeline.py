@@ -590,6 +590,58 @@ Unfortunately, the stationary kernel is merely valid within $\pm 10\%$ perturbat
         self.assertIn("PDF_MISSING", res_missing_pdf.stdout)
         self.assertIn("RENDER_PDF_MISSING", res_missing_pdf.stdout)
 
+    def test_09_raw_data_immutability_seal_and_write_guard(self) -> None:
+        # 1. Init workspace and drop original files into 00_problem/ & 01_data/raw/
+        self.assertEqual(run_py(INIT_SCRIPT, str(self.root)).returncode, 0)
+        raw_csv = self.root / "01_data" / "raw" / "dataset.csv"
+        prob_pdf = self.root / "00_problem" / "notice.txt"
+        raw_csv.write_text("id,val\n1,10.5\n2,20.3\n", encoding="utf-8")
+        prob_pdf.write_text("Official Contest Notice 2026\n", encoding="utf-8")
+
+        # 2. Before locking, --verify-raw MUST fail with RAW_SEAL_MISSING
+        res_unsealed = run_py(AUDIT_SCRIPT, "--verify-raw", str(self.root))
+        self.assertEqual(res_unsealed.returncode, 2)
+        self.assertIn("RAW_SEAL_MISSING", res_unsealed.stdout)
+
+        # 3. Lock SHA-256 baseline with init_project.py --lock-raw -> verify passes
+        res_lock = run_py(INIT_SCRIPT, str(self.root), "--lock-raw")
+        self.assertEqual(res_lock.returncode, 0, res_lock.stdout + res_lock.stderr)
+        self.assertTrue((self.root / "01_data" / ".raw_checksums.json").is_file())
+        res_ok = run_py(AUDIT_SCRIPT, "--verify-raw", str(self.root))
+        self.assertEqual(res_ok.returncode, 0, res_ok.stdout)
+
+        # 4. Tampering with 1 byte of 01_data/raw/dataset.csv MUST fail with RAW_DATA_MODIFIED
+        raw_csv.write_text("id,val\n1,99.9\n2,20.3\n", encoding="utf-8")
+        res_mod = run_py(AUDIT_SCRIPT, "--verify-raw", str(self.root))
+        self.assertEqual(res_mod.returncode, 2)
+        self.assertIn("RAW_DATA_MODIFIED", res_mod.stdout)
+
+        # Restore raw_csv, then delete 00_problem/notice.txt -> MUST fail with RAW_DATA_DELETED
+        raw_csv.write_text("id,val\n1,10.5\n2,20.3\n", encoding="utf-8")
+        prob_pdf.unlink()
+        res_del = run_py(AUDIT_SCRIPT, "--verify-raw", str(self.root))
+        self.assertEqual(res_del.returncode, 2)
+        self.assertIn("RAW_DATA_DELETED", res_del.stdout)
+
+        # Restore notice.txt and test static code guard against scripts overwriting 01_data/raw/
+        prob_pdf.write_text("Official Contest Notice 2026\n", encoding="utf-8")
+        (self.root / "02_src" / "bad_clean.py").write_text(
+            'df.to_csv("01_data/raw/dataset.csv", index=False)\n',
+            encoding="utf-8",
+        )
+        tex = self.root / "04_paper" / "main.tex"
+        tex.write_text("\\documentclass{article}\n\\begin{document}\nClean.\n\\end{document}\n", encoding="utf-8")
+        res_write_guard = run_py(
+            AUDIT_SCRIPT,
+            str(tex),
+            "--src-dir",
+            str(self.root / "02_src"),
+            "--verify-raw",
+            str(self.root),
+        )
+        self.assertEqual(res_write_guard.returncode, 2)
+        self.assertIn("SRC_WRITES_RAW", res_write_guard.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

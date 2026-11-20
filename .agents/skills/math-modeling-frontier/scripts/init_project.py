@@ -12,10 +12,62 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import shutil
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Dict
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def seal_raw_data(root: Path, force: bool = False) -> Path:
+    """Compute SHA-256 baseline checksums for all original files in 00_problem/ and 01_data/raw/."""
+    seal_path = root / "01_data" / ".raw_checksums.json"
+    existing_files: Dict[str, Dict[str, object]] = {}
+    if seal_path.is_file() and not force:
+        try:
+            prev = json.loads(seal_path.read_text(encoding="utf-8"))
+            existing_files = dict(prev.get("files", {}))
+        except Exception:
+            existing_files = {}
+
+    sealed: Dict[str, Dict[str, object]] = dict(existing_files)
+    added = 0
+    for rel_dir in ("00_problem", "01_data/raw"):
+        d = root / rel_dir
+        if not d.is_dir():
+            continue
+        for p in sorted(d.rglob("*")):
+            if not p.is_file() or p.name.startswith("."):
+                continue
+            rel_key = p.relative_to(root).as_posix()
+            # Never silently overwrite an already-sealed file's hash unless --force is explicit
+            if rel_key in sealed and not force:
+                continue
+            sealed[rel_key] = {
+                "sha256": _sha256_file(p),
+                "bytes": p.stat().st_size,
+            }
+            added += 1
+
+    payload = {
+        "sealed_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "note": "Immutable SHA-256 baseline for original files in 00_problem/ and 01_data/raw/. Do not edit raw files.",
+        "files": sealed,
+    }
+    seal_path.parent.mkdir(parents=True, exist_ok=True)
+    seal_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"[SEAL]   {seal_path} ({len(sealed)} file(s) sealed, {added} newly added)")
+    return seal_path
 
 
 def write_if_allowed(path: Path, content: str, force: bool) -> str:
@@ -61,14 +113,24 @@ def main() -> int:
         help="Short problem label (e.g., 'Problem A')",
     )
     parser.add_argument(
+        "--lock-raw",
+        action="store_true",
+        help="Seal SHA-256 checksums of original files in 00_problem/ and 01_data/raw/ into 01_data/.raw_checksums.json",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
-        help="Overwrite existing starter markdown/style files if present",
+        help="Overwrite existing starter markdown/style files (or re-seal modified checksums when combined with --lock-raw)",
     )
     args = parser.parse_args()
 
     root = Path(args.project_dir).resolve()
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    if args.lock_raw and (root / "00_plan.md").is_file() and not args.force:
+        # Fast-path: project already initialized; seal any new original raw/problem files without touching starter docs
+        seal_raw_data(root, force=False)
+        return 0
 
     for d in [
         root / "00_problem",
@@ -234,6 +296,15 @@ Thumbs.db
         (root / ".gitignore", gitignore),
     ]:
         print(write_if_allowed(target, content, args.force))
+
+    # Automatically seal original files if present in 00_problem/ or 01_data/raw/ (or when --lock-raw is set)
+    has_originals = any(
+        p.is_file() and not p.name.startswith(".")
+        for rel_dir in ("00_problem", "01_data/raw")
+        for p in (root / rel_dir).rglob("*")
+    )
+    if args.lock_raw or has_originals:
+        seal_raw_data(root, force=args.force)
 
     print(f"\n[DONE] Dual-tier workspace ready at: {root}")
     print(f"       Hot relay: handoff.md (<=80 lines) | Canonical: 00_plan.md | Cold: 01_log.md")

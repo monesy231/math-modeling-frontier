@@ -13,6 +13,7 @@ Exit code:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -554,6 +555,74 @@ def check_pdf_metadata(pdf_path: Optional[Path], ban_terms: List[str]) -> Tuple[
     return hard_fails, warnings, info_lines
 
 
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def verify_raw_data_integrity(project_root: Path, require_seal: bool = True) -> Tuple[List[str], List[str], List[str]]:
+    """
+    Verify SHA-256 immutability of original files in 00_problem/ and 01_data/raw/
+    against 01_data/.raw_checksums.json created by init_project.py --lock-raw.
+    Returns (hard_fails, warnings, info_lines).
+    """
+    fails: List[str] = []
+    warns: List[str] = []
+    info: List[str] = []
+
+    root = project_root.resolve()
+    seal_path = root / "01_data" / ".raw_checksums.json"
+    live_originals: Set[str] = set()
+    for rel_dir in ("00_problem", "01_data/raw"):
+        d = root / rel_dir
+        if d.is_dir():
+            for p in sorted(d.rglob("*")):
+                if p.is_file() and not p.name.startswith("."):
+                    live_originals.add(p.relative_to(root).as_posix())
+
+    if not seal_path.is_file():
+        if require_seal and live_originals:
+            fails.append(
+                f"[RAW_SEAL_MISSING] {len(live_originals)} original file(s) exist in 00_problem/ or 01_data/raw/ "
+                f"but '{seal_path}' is missing. Run 'init_project.py <root> --lock-raw'!"
+            )
+        elif require_seal:
+            info.append("  - No original files found in 00_problem/ or 01_data/raw/ yet.")
+        return fails, warns, info
+
+    try:
+        payload = json.loads(seal_path.read_text(encoding="utf-8"))
+        sealed_files: Dict[str, Dict[str, object]] = payload.get("files", {})
+    except Exception as exc:
+        return [f"[RAW_SEAL_CORRUPT] Could not parse {seal_path}: {exc}"], warns, info
+
+    verified = 0
+    for rel_key, meta in sorted(sealed_files.items()):
+        target = root / rel_key
+        if not target.is_file():
+            fails.append(f"[RAW_DATA_DELETED] Sealed original file is missing: '{rel_key}'")
+            continue
+        actual_hash = _sha256_file(target)
+        expected_hash = str(meta.get("sha256", ""))
+        if actual_hash != expected_hash:
+            fails.append(
+                f"[RAW_DATA_MODIFIED] Original file '{rel_key}' was altered (SHA-256 mismatch)! Restore untouched raw data."
+            )
+        else:
+            verified += 1
+
+    for unsealed in sorted(live_originals - set(sealed_files.keys())):
+        warns.append(
+            f"[RAW_UNSEALED_FILE] New file '{unsealed}' is not yet in .raw_checksums.json; run 'init_project.py --lock-raw'."
+        )
+
+    info.append(f"  - Verified {verified}/{len(sealed_files)} sealed original file(s) in 00_problem/ & 01_data/raw/")
+    return fails, warns, info
+
+
 def check_src_paths(src_dir: Optional[Path], ban_terms: List[str]) -> List[str]:
     if src_dir is None:
         return []
@@ -567,6 +636,24 @@ def check_src_paths(src_dir: Optional[Path], ban_terms: List[str]) -> List[str]:
     for term in ban_terms:
         pats.append(("SRC_BAN", re.escape(term)))
     hits = scan_patterns(src_files, pats)
+
+    # Guard against scripts writing/deleting inside immutable 01_data/raw/ or 00_problem/
+    raw_dir_rx = re.compile(r"(?:01_data[/\\]+raw|00_problem)", re.IGNORECASE)
+    raw_write_rxs = [
+        re.compile(r"(?:to_csv|to_excel|to_parquet|to_json|to_pickle|to_feather|savetxt|savez?|dump)\s*\(", re.IGNORECASE),
+        re.compile(r"(?:write_text|write_bytes)\s*\(", re.IGNORECASE),
+        re.compile(r"open\s*\([^)]*,\s*['\"][wax+]", re.IGNORECASE),
+        re.compile(r"(?:os\.remove|os\.unlink|shutil\.move|shutil\.rmtree|\.unlink)\s*\(", re.IGNORECASE),
+    ]
+    for path in src_files:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if line.lstrip().startswith("#"):
+                continue
+            if raw_dir_rx.search(line) and any(rx.search(line) for rx in raw_write_rxs):
+                snippet = line.strip()[:110]
+                hits.append((path.name, lineno, "SRC_WRITES_RAW", "01_data/raw or 00_problem write", snippet))
+
     return [
         f"[{code}] {fname}:{lineno} matched '{matched}' | {snippet}"
         for fname, lineno, code, matched, snippet in hits
@@ -708,6 +795,7 @@ def main() -> int:
     parser.add_argument("--figs-dir", type=str, default=None, help="Path to 03_outputs/figs")
     parser.add_argument("--src-dir", type=str, default=None, help="Path to 02_src/ for local-path/anonymity scan")
     parser.add_argument("--plan", type=str, default=None, help="Path to 00_plan.md to verify live contest rules")
+    parser.add_argument("--verify-raw", type=str, default=None, help="Project root to verify SHA-256 immutability of 00_problem/ & 01_data/raw/")
     parser.add_argument("--log", type=str, default=None, help="Path to LaTeX compile .log file")
     parser.add_argument("--pdf", type=str, default=None, help="Path to compiled .pdf for metadata/page check")
     parser.add_argument("--render-pdf", type=str, default=None, help="Output dir to rasterize PDF pages to PNGs")
@@ -717,12 +805,12 @@ def main() -> int:
     parser.add_argument("--ban-terms", type=str, default="", help="Comma-separated custom anonymity terms to ban")
     args = parser.parse_args()
 
-    if not args.paper and not args.check_handoff and not args.plan:
-        parser.error("Provide a manuscript path, --check-handoff <handoff.md>, and/or --plan <00_plan.md>.")
+    if not args.paper and not args.check_handoff and not args.plan and not args.verify_raw:
+        parser.error("Provide a manuscript path, --check-handoff, --plan, and/or --verify-raw.")
 
     total_hard_fails = 0
     print("=" * 72)
-    print("MATH MODELING FRONTIER AUDIT & RELAY VALIDATOR (v1.2)")
+    print("MATH MODELING FRONTIER AUDIT & RELAY VALIDATOR (v1.3)")
     print("=" * 72)
 
     # ---- OPTIONAL: O(1) HANDOFF RELAY CHECK ----
@@ -753,6 +841,28 @@ def main() -> int:
         else:
             total_hard_fails += len(p_fails)
             for msg in p_fails:
+                print(f"  [HARD FAIL]{msg}")
+
+    # ---- OPTIONAL: RAW DATA IMMUTABILITY CHECK (SHA-256) ----
+    raw_root: Optional[Path] = None
+    require_seal = False
+    if args.verify_raw:
+        raw_root = Path(args.verify_raw)
+        require_seal = True
+    elif args.project_root and (Path(args.project_root) / "01_data" / ".raw_checksums.json").is_file():
+        raw_root = Path(args.project_root)
+    if raw_root is not None:
+        r_fails, r_warns, r_info = verify_raw_data_integrity(raw_root, require_seal=require_seal)
+        print("\n[RAW DATA IMMUTABILITY CHECK] (00_problem/ & 01_data/raw/ SHA-256)")
+        for line in r_info:
+            print(line)
+        for w in r_warns:
+            print(f"  [WARN]{w}")
+        if not r_fails:
+            print("  -> PASS (all sealed original files untouched)")
+        else:
+            total_hard_fails += len(r_fails)
+            for msg in r_fails:
                 print(f"  [HARD FAIL]{msg}")
 
     # ---- MANUSCRIPT AUDIT ----

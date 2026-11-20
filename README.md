@@ -2,7 +2,7 @@
 
 # `math-modeling-frontier`
 
-**面向新一代旗舰模型的极简双层数模竞赛工程 Skill（v1.2）**
+**面向新一代旗舰模型的极简双层数模竞赛工程 Skill（v1.3）**
 *Zero Cognitive Shackles · Dual-Tier Relay · O(1) Cross-Model Memory · Nature/Science Visuals · Zero-Transcription LaTeX*
 
 [![CI](https://github.com/monesy231/math-modeling-frontier/actions/workflows/ci.yml/badge.svg)](https://github.com/monesy231/math-modeling-frontier/actions/workflows/ci.yml)
@@ -74,7 +74,8 @@
 - **图表审美靠代码不靠嘴**：[plot_style.py](./.agents/skills/math-modeling-frontier/scripts/plot_style.py) 内置 *Nature / Science / PNAS* 单栏（`3.5 in`）、1.5 栏（`5.0 in`）、双栏（`7.2 in`）物理宽度、色盲/灰度安全低饱和色板 + 线型/标记双冗余、`label_panels()`、`plot_with_ci()`、`plot_tornado()`、`plot_diverging_heatmap()`、`plot_pipeline_diagram()`、`add_zoom_inset()` 及 `.pdf` + 300 DPI `.png` 双导出防遮挡自检；[visual.md](./.agents/skills/math-modeling-frontier/references/visual.md) 仅 **8 行**。
 - **反防御与论文排版靠微对照**：写作（Step 5）与审稿（Step 6）**物理会话+文件双隔离**；[writing.md](./.agents/skills/math-modeling-frontier/references/writing.md) 仅 **20 行**，用 1 行 `❌→✅` 精准消灭 D1–D5 防御废话、试错日记、照搬题干和廉价竖线表，局限性统一收口到文末一节。
 
-### 6. 独立两阶段红队终审 + 缺件硬阻断 + 真 LaTeX 编译 CI 保障
+### 6. 原始数据防篡改封条 + 独立两阶段红队终审 + 真 LaTeX 编译 CI 保障
+- **原始数据只读与 SHA-256 防篡改封条（v1.3）**：`00_problem/` 与 `01_data/raw/` 严格只读（所有清洗与派生数据一律写入 `01_data/clean/`）；`init_project.py --lock-raw` 自动生成 `01_data/.raw_checksums.json` 校验封条，`audit_paper.py --verify-raw` 同时做 **SHA-256 逐文件完整性校验**（篡改/删除原文件直接 `FAIL`）与 **`02_src/` 静态写拦截**（拦截任何脚本往 `01_data/raw/` 覆盖写或删文件）。
 - Step 6 强制另开独立只读旗舰会话（**建议换用不同于写作模型的另一款旗舰模型交叉审稿**），先运行 [audit_paper.py](./.agents/skills/math-modeling-frontier/scripts/audit_paper.py)：
   - **Stage 1 硬门禁（缺件或渲染失败一律 `FAIL`，绝不静默返回 0）**：按 6 项必填字段逐项核验 `00_plan.md` 赛规与来源、内部工程词零泄漏、正文/代码（`02_src/`）/PDF 元数据零匿名与路径泄漏、`\ref` 无断链、无过期宏与孤儿表、指定的 `.pdf`/`.log`/目录必须真实存在且 `--render-pdf` 必须成功将 `main.pdf` **逐页转成 PNG** 供多模态旗舰“肉眼”审查每一页版面。
   - **Stage 2 章节感知信号 + 最小手术精修**：自动识别 LaTeX/Markdown 章节标题与代码环境——**在文末 *Strengths, Weaknesses / Limitations / AI Report* 章节和代码附录中自动豁免 `D2/D5` 误报**，只在摘要/引言/建模/结果/结论里严抓防御性废话与 AI 腔，仅输出 `位置 | 类别 | 原句 | 建议替换` 手术表。
