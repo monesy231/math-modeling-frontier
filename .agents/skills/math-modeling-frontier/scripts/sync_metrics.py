@@ -207,7 +207,17 @@ def parse_bold_rules(spec: str) -> Dict[str, str]:
     return rules
 
 
+def _ensure_utf8_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
 def main() -> int:
+    _ensure_utf8_stdio()
     parser = argparse.ArgumentParser(
         description="Sync 03_outputs/metrics (.json/.csv) into LaTeX macros, Booktabs tables, and provenance manifest."
     )

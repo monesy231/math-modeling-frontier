@@ -689,7 +689,17 @@ def summarize_metrics(metrics_dir: Optional[Path]) -> List[str]:
     return lines
 
 
+def _ensure_utf8_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
 def main() -> int:
+    _ensure_utf8_stdio()
     parser = argparse.ArgumentParser(
         description="Deterministic Stage 1+2 audit scanner, PDF page renderer, plan-rule gate, and handoff validator."
     )

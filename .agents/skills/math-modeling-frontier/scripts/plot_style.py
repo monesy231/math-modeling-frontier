@@ -15,6 +15,7 @@ Key journal conventions baked into code (zero prompt bloat):
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple, Union
 
@@ -616,6 +617,12 @@ def _run_self_test(out_dir: str, lang: str) -> None:
 
 
 if __name__ == "__main__":
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            try:
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
     parser = argparse.ArgumentParser(description="Run Nature/Science plot_style self-test.")
     parser.add_argument("--self-test", action="store_true", help="Generate a 3-panel Nature-style showcase")
     parser.add_argument("--out", default="03_outputs/figs", help="Output directory for self-test")

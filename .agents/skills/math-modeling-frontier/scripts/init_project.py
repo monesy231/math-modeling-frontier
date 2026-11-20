@@ -26,7 +26,17 @@ def write_if_allowed(path: Path, content: str, force: bool) -> str:
     return f"[CREATE] {path}"
 
 
+def _ensure_utf8_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
 def main() -> int:
+    _ensure_utf8_stdio()
     parser = argparse.ArgumentParser(
         description="Scaffold a dual-tier frontier mathematical modeling workspace."
     )
