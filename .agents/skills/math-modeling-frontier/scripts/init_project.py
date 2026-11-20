@@ -2,7 +2,7 @@
 """
 Initialize a contest-agnostic mathematical modeling workspace with O(1) Layered
 Relay Memory for Flagship ([F]) <-> Workhorse ([W]) model switching:
-  - handoff.md  (HOT, <=60 lines, overwritten on every model switch)
+  - handoff.md  (HOT, <=80 lines, overwritten on every model switch)
   - 00_plan.md  (CANONICAL, read on demand: live rules, Q1->Qn spine, Nomenclature, Gates)
   - 01_log.md   (COLD, append-only, never preloaded: EDA provenance, dead ends, audit trail)
 
@@ -86,7 +86,7 @@ def main() -> int:
     problem_files = sorted(p.name for p in (root / "00_problem").iterdir() if p.is_file())
     problem_listing = ", ".join(problem_files) if problem_files else "[Drop latest official files into 00_problem/]"
 
-    handoff_md = f"""# handoff.md — HOT Relay Packet (OVERWRITE every switch | HARD CAP <= 60 lines)
+    handoff_md = f"""# handoff.md — HOT Relay Packet (OVERWRITE every switch | HARD CAP <= 80 lines)
 
 - **Updated**: {now_str}
 - **Current Step**: `Step 0 -> Step 1`
@@ -94,7 +94,7 @@ def main() -> int:
 - **Deadline Guard (<8h)?**: `NO`
 
 ## Active Task (Next Turn Only)
-1. Extract live contest rules from `00_problem/` into `00_plan.md` Sec. 0.
+1. Extract live contest rules from `00_problem/` into `00_plan.md` Sec. 0 (clear all `[EXTRACT FROM 00_problem/]` tags).
 2. Inspect raw data summary in `01_data/raw/` and log statistical premises in `01_log.md`.
 3. Self-play 2–3 distinct paradigms, lock `Q1 -> Qn` spine & Baseline route in `00_plan.md`, then pause at **Gate M**.
 
@@ -110,6 +110,9 @@ def main() -> int:
 
 ## Open Blockers / Do-Not-Repeat (Max 3 Items)
 - None yet.
+
+## Next Session Trigger (Copy 1 Line Into Next Model)
+`使用 math-modeling-frontier 执行 MM Step 1`
 """
 
     plan_md = f"""# 00_plan.md — Canonical Rules, Math Spine, Nomenclature & Gates (Read On Demand)
@@ -223,7 +226,7 @@ Thumbs.db
         print(write_if_allowed(target, content, args.force))
 
     print(f"\n[DONE] Dual-tier workspace ready at: {root}")
-    print(f"       Hot relay: handoff.md (<=60 lines) | Canonical: 00_plan.md | Cold: 01_log.md")
+    print(f"       Hot relay: handoff.md (<=80 lines) | Canonical: 00_plan.md | Cold: 01_log.md")
     return 0
 
 

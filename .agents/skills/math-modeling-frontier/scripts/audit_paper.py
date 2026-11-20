@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Deterministic Stage 1 (Hard Compliance), Stage 2 (Defensive/AI-Slop/Cheap-Table Signals),
-PDF Page Renderer (for multimodal visual page-by-page inspection), and O(1) `handoff.md`
-Relay Validator for mathematical modeling workflows.
+Deterministic Stage 1 (Hard Compliance), Section-Aware Stage 2 (Defensive /
+AI-Slop / Cheap-Table Signals), PDF Page Renderer (for multimodal page-by-page
+inspection), 00_plan.md Live-Rule Gate, and O(1) `handoff.md` Relay Validator.
 
 Exit code:
-  0 = Stage 1 / Handoff checks PASS
-  2 = Stage 1 / Handoff checks FAIL (blocking defects must be fixed)
+  0 = Stage 1 / Handoff / Plan checks PASS
+  2 = Blocking hard failures detected (must fix before proceeding)
 """
 from __future__ import annotations
 
@@ -86,6 +86,18 @@ AI_SLOP_PATTERNS: List[Tuple[str, str]] = [
     ("CHEAP_TABLE", r"\\begin\{tabular\}\{[^}]*\|"),
 ]
 
+# Section headings where legitimate discussion of boundaries/weaknesses is expected
+LIMITATION_SECTION_RX = re.compile(
+    r"(?:strengths?|weakness|limitation|further\s+discussion|future\s+work|report\s+on\s+use\s+of\s+ai|ai\s+usage"
+    r"|优缺点|局限|不足|模型评价|模型改进|讨论与展望|人工智能使用)",
+    re.IGNORECASE,
+)
+LIMITATION_EXEMPT_CODES: Set[str] = {"D2_NON_CLAIM", "D5_SELF_SABOTAGE"}
+TEX_SECTION_RX = re.compile(r"\\(?:sub){0,2}section\*?(?:\[[^\]]*\])?\{([^}]+)\}")
+MD_SECTION_RX = re.compile(r"^\s{0,3}#{1,3}\s+(.+?)\s*$")
+CODE_ENV_START_RX = re.compile(r"\\begin\{(?:verbatim|lstlisting|minted)\*?\}")
+CODE_ENV_END_RX = re.compile(r"\\end\{(?:verbatim|lstlisting|minted)\*?\}")
+
 
 def collect_manuscript_files(target: Path) -> List[Path]:
     if target.is_file():
@@ -103,6 +115,7 @@ def scan_patterns(
     patterns: List[Tuple[str, str]],
     case_insensitive: bool = True,
 ) -> List[Tuple[str, int, str, str, str]]:
+    """Unfiltered line-by-line scanner used for Stage 1 hard gates (zero exemptions)."""
     flags = re.IGNORECASE if case_insensitive else 0
     compiled = [(code, re.compile(pat, flags)) for code, pat in patterns]
     hits: List[Tuple[str, int, str, str, str]] = []
@@ -119,8 +132,115 @@ def scan_patterns(
     return hits
 
 
-def validate_handoff(handoff_path: Path, project_root: Optional[Path] = None, max_lines: int = 60) -> Tuple[List[str], List[str]]:
-    """Enforce O(1) handoff.md relay contract: <=60 lines, zero fenced code blocks, valid file pointers."""
+def scan_stage2_section_aware(
+    files: List[Path],
+    patterns: List[Tuple[str, str]],
+) -> Tuple[List[Tuple[str, int, str, str, str]], int]:
+    """
+    Section-aware Stage 2 prose scanner:
+    - Skips LaTeX preamble (before \\begin{document} if present), comments, and code blocks.
+    - Suppresses D2/D5 false positives inside dedicated Limitations / Weaknesses / AI Report sections.
+    Returns (hits, suppressed_count).
+    """
+    compiled = [(code, re.compile(pat, re.IGNORECASE)) for code, pat in patterns]
+    hits: List[Tuple[str, int, str, str, str]] = []
+    suppressed = 0
+
+    for path in files:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        lines = text.splitlines()
+        is_tex = path.suffix.lower() == ".tex"
+        has_begin_doc = is_tex and any(r"\begin{document}" in ln for ln in lines)
+
+        in_body = not has_begin_doc
+        in_code_env = False
+        in_md_fence = False
+        in_limitation_section = False
+
+        for lineno, line in enumerate(lines, start=1):
+            stripped = line.strip()
+
+            if has_begin_doc and not in_body:
+                if r"\begin{document}" in line:
+                    in_body = True
+                continue
+
+            if is_tex:
+                if stripped.startswith("%"):
+                    continue
+                if CODE_ENV_START_RX.search(line):
+                    in_code_env = True
+                    continue
+                if in_code_env:
+                    if CODE_ENV_END_RX.search(line):
+                        in_code_env = False
+                    continue
+                m_sec = TEX_SECTION_RX.search(line)
+                if m_sec:
+                    in_limitation_section = bool(LIMITATION_SECTION_RX.search(m_sec.group(1)))
+            else:
+                if stripped.startswith("```"):
+                    in_md_fence = not in_md_fence
+                    continue
+                if in_md_fence:
+                    continue
+                m_sec = MD_SECTION_RX.match(line)
+                if m_sec:
+                    in_limitation_section = bool(LIMITATION_SECTION_RX.search(m_sec.group(1)))
+
+            for code, rx in compiled:
+                m = rx.search(line)
+                if not m:
+                    continue
+                if in_limitation_section and code in LIMITATION_EXEMPT_CODES:
+                    suppressed += 1
+                    continue
+                snippet = stripped if len(stripped) <= 110 else stripped[:107] + "..."
+                hits.append((path.name, lineno, code, m.group(0), snippet))
+
+    return hits, suppressed
+
+
+def check_plan_live_rules(plan_path: Optional[Path]) -> Tuple[List[str], List[str]]:
+    """Verify Section 0 of 00_plan.md has no unextracted or unverified official contest rules."""
+    if not plan_path:
+        return [], []
+    if not plan_path.is_file():
+        return [f"[PLAN_MISSING] 00_plan.md not found at: {plan_path}"], []
+
+    text = plan_path.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines()
+    in_sec0 = False
+    sec0_found = False
+    fails: List[str] = []
+    info: List[str] = []
+
+    for lineno, line in enumerate(lines, start=1):
+        if re.match(r"^\s*##\s*0\.", line):
+            in_sec0 = True
+            sec0_found = True
+            continue
+        if in_sec0 and re.match(r"^\s*##\s*[1-9]\.", line):
+            break
+        if in_sec0:
+            if "[EXTRACT FROM 00_problem/]" in line or "[待核验]" in line:
+                fails.append(
+                    f"[UNVERIFIED_CONTEST_RULE] {plan_path.name}:{lineno} still unresolved | {line.strip()[:95]}"
+                )
+
+    if not sec0_found:
+        info.append(f"  - Note: No '## 0.' Live Official Rules section found in {plan_path.name}")
+    else:
+        info.append(f"  - Checked Live Official Rules in {plan_path.name}")
+    return fails, info
+
+
+def validate_handoff(
+    handoff_path: Path,
+    project_root: Optional[Path] = None,
+    max_lines: int = 80,
+) -> Tuple[List[str], List[str]]:
+    """Enforce O(1) handoff.md relay contract: <=max_lines, zero fenced code blocks, valid pointers."""
     fails: List[str] = []
     info: List[str] = []
     if not handoff_path.is_file():
@@ -141,7 +261,6 @@ def validate_handoff(handoff_path: Path, project_root: Optional[Path] = None, ma
         if required.lower() not in joined.lower():
             fails.append(f"[HANDOFF_FIELD] Missing required header '{required}' in {handoff_path.name}")
 
-    # Verify backticked project pointers exist on disk
     ptr_rx = re.compile(r"`((?:00_problem|01_data|02_src|03_outputs|04_paper)/[^`\s*<>]+|(?:00_plan|01_log)\.md)`")
     checked: Set[str] = set()
     for m in ptr_rx.finditer(joined):
@@ -152,6 +271,15 @@ def validate_handoff(handoff_path: Path, project_root: Optional[Path] = None, ma
         if not (root / rel).exists():
             fails.append(f"[HANDOFF_BROKEN_PTR] Referenced path does not exist: '{rel}' (under {root})")
     info.append(f"  - Verified {len(checked)} project pointer(s) under {root}")
+
+    # If relay has moved to Step 2+, automatically verify 00_plan.md Sec. 0 has no unconfirmed rules
+    m_step = re.search(r"Current Step\*{0,2}:\s*`?Step\s*([2-6])", joined, re.IGNORECASE)
+    plan_file = root / "00_plan.md"
+    if m_step and plan_file.is_file():
+        p_fails, p_info = check_plan_live_rules(plan_file)
+        fails.extend(p_fails)
+        info.extend(p_info)
+
     return fails, info
 
 
@@ -159,7 +287,6 @@ def render_pdf_pages(pdf_path: Path, out_dir: Path, dpi: int = 150) -> Tuple[Lis
     """Render each PDF page to PNG for multimodal visual page-by-page inspection."""
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Try PyMuPDF (pymupdf / legacy fitz)
     try:
         try:
             import pymupdf as fitz  # type: ignore
@@ -180,7 +307,6 @@ def render_pdf_pages(pdf_path: Path, out_dir: Path, dpi: int = 150) -> Tuple[Lis
     except Exception:
         pass
 
-    # 2. Try pdf2image
     try:
         from pdf2image import convert_from_path  # type: ignore
 
@@ -194,7 +320,6 @@ def render_pdf_pages(pdf_path: Path, out_dir: Path, dpi: int = 150) -> Tuple[Lis
     except Exception:
         pass
 
-    # 3. Try pdftoppm CLI (Poppler)
     pdftoppm = shutil.which("pdftoppm")
     if pdftoppm:
         prefix = out_dir / "page"
@@ -206,7 +331,6 @@ def render_pdf_pages(pdf_path: Path, out_dir: Path, dpi: int = 150) -> Tuple[Lis
         if res.returncode == 0:
             return sorted(out_dir.glob("page-*.png")), None
 
-    # 4. Try Ghostscript CLI
     gs = shutil.which("gswin64c") or shutil.which("gs")
     if gs:
         pattern = str(out_dir / "page_%02d.png")
@@ -218,7 +342,7 @@ def render_pdf_pages(pdf_path: Path, out_dir: Path, dpi: int = 150) -> Tuple[Lis
         if res.returncode == 0:
             return sorted(out_dir.glob("page_*.png")), None
 
-    return [], "No PDF rasterizer found (tried PyMuPDF/fitz, pdf2image, pdftoppm, ghostscript)."
+    return [], "No PDF rasterizer found (tried PyMuPDF, pdf2image, pdftoppm, ghostscript)."
 
 
 def check_latex_refs_and_figs(
@@ -362,7 +486,6 @@ def check_src_paths(src_dir: Optional[Path], ban_terms: List[str]) -> List[str]:
 
 
 def check_metrics_sync_freshness(target: Path, metrics_dir: Optional[Path]) -> List[str]:
-    """Fail if generated_metrics.tex / generated_tables exist but are older than metrics/*.json|csv."""
     if not metrics_dir or not metrics_dir.is_dir():
         return []
     paper_dir = target if target.is_dir() else target.parent
@@ -411,26 +534,28 @@ def summarize_metrics(metrics_dir: Optional[Path]) -> List[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Deterministic Stage 1+2 audit scanner, PDF page renderer, and handoff validator."
+        description="Deterministic Stage 1+2 audit scanner, PDF page renderer, plan-rule gate, and handoff validator."
     )
     parser.add_argument("paper", nargs="?", default=None, help="Path to manuscript .tex/.md file or directory")
     parser.add_argument("--metrics-dir", type=str, default=None, help="Path to 03_outputs/metrics")
     parser.add_argument("--figs-dir", type=str, default=None, help="Path to 03_outputs/figs")
     parser.add_argument("--src-dir", type=str, default=None, help="Path to 02_src/ for local-path/anonymity scan")
+    parser.add_argument("--plan", type=str, default=None, help="Path to 00_plan.md to verify live contest rules")
     parser.add_argument("--log", type=str, default=None, help="Path to LaTeX compile .log file")
     parser.add_argument("--pdf", type=str, default=None, help="Path to compiled .pdf for metadata/page check")
     parser.add_argument("--render-pdf", type=str, default=None, help="Output dir to rasterize PDF pages to PNGs")
     parser.add_argument("--check-handoff", type=str, default=None, help="Validate O(1) handoff.md relay contract")
+    parser.add_argument("--max-lines", type=int, default=80, help="Hard line cap for handoff.md (default: 80)")
     parser.add_argument("--project-root", type=str, default=None, help="Project root for verifying handoff pointers")
     parser.add_argument("--ban-terms", type=str, default="", help="Comma-separated custom anonymity terms to ban")
     args = parser.parse_args()
 
-    if not args.paper and not args.check_handoff:
-        parser.error("Provide a manuscript path and/or --check-handoff <handoff.md>.")
+    if not args.paper and not args.check_handoff and not args.plan:
+        parser.error("Provide a manuscript path, --check-handoff <handoff.md>, and/or --plan <00_plan.md>.")
 
     total_hard_fails = 0
     print("=" * 72)
-    print("MATH MODELING FRONTIER AUDIT & RELAY VALIDATOR")
+    print("MATH MODELING FRONTIER AUDIT & RELAY VALIDATOR (v1.1)")
     print("=" * 72)
 
     # ---- OPTIONAL: O(1) HANDOFF RELAY CHECK ----
@@ -438,8 +563,9 @@ def main() -> int:
         h_fails, h_info = validate_handoff(
             Path(args.check_handoff),
             Path(args.project_root) if args.project_root else None,
+            max_lines=args.max_lines,
         )
-        print("\n[HANDOFF CONTRACT CHECK] (Hard Cap <= 60 lines | Pointer-Only)")
+        print(f"\n[HANDOFF CONTRACT CHECK] (Hard Cap <= {args.max_lines} lines | Pointer-Only)")
         for line in h_info:
             print(line)
         if not h_fails:
@@ -447,6 +573,19 @@ def main() -> int:
         else:
             total_hard_fails += len(h_fails)
             for msg in h_fails:
+                print(f"  [HARD FAIL]{msg}")
+
+    # ---- OPTIONAL: 00_plan.md LIVE RULE CONFIRMATION CHECK ----
+    if args.plan:
+        p_fails, p_info = check_plan_live_rules(Path(args.plan))
+        print("\n[LIVE CONTEST RULES CHECK] (00_plan.md Sec. 0)")
+        for line in p_info:
+            print(line)
+        if not p_fails:
+            print("  -> PASS (all live official rules confirmed)")
+        else:
+            total_hard_fails += len(p_fails)
+            for msg in p_fails:
                 print(f"  [HARD FAIL]{msg}")
 
     # ---- MANUSCRIPT AUDIT ----
@@ -474,7 +613,7 @@ def main() -> int:
         all_warns = fig_warns + log_warns + pdf_warns
         total_hard_fails += len(s1_hits) + len(all_extra_fails)
 
-        print(f"\n[STAGE 1] Hard Facts, Anti-Leak, Anonymity, Refs, Code, Log & PDF ({len(files)} file(s))")
+        print(f"\n[STAGE 1] Hard Facts, Anti-Leak, Anonymity, Refs, Code, Sync, Log & PDF ({len(files)} file(s))")
         if not s1_hits and not all_extra_fails:
             print("  -> PASS (0 hard failures)")
         else:
@@ -509,10 +648,12 @@ def main() -> int:
         for line in summarize_metrics(Path(args.metrics_dir) if args.metrics_dir else None):
             print(line)
 
-        s2_hits = scan_patterns(files, DEFENSIVE_PATTERNS + AI_SLOP_PATTERNS)
-        print("\n[STAGE 2 SIGNALS] Defensive Writing (D1-D5), AI-Slop & Cheap Tables")
+        s2_hits, suppressed = scan_stage2_section_aware(files, DEFENSIVE_PATTERNS + AI_SLOP_PATTERNS)
+        print("\n[STAGE 2 SIGNALS] Section-Aware Defensive (D1-D5), AI-Slop & Cheap Tables")
+        if suppressed > 0:
+            print(f"  (Exempted {suppressed} legitimate D2/D5 match(es) inside dedicated Limitations/AI-Report sections)")
         if not s2_hits:
-            print("  -> CLEAN (0 regex triggers; still perform semantic Stage 2 audit)")
+            print("  -> CLEAN (0 prose triggers; still perform semantic Stage 2 audit)")
         else:
             print(f"  -> Found {len(s2_hits)} signal(s) for surgical review:")
             for fname, lineno, code, matched, snippet in s2_hits:

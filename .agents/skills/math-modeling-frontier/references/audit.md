@@ -5,7 +5,7 @@
 ## Pre-Step: Deterministic Scan & PDF Page Rasterization
 ```bash
 python <SKILL_DIR>/scripts/audit_paper.py <PAPER_PATH> \
-  --metrics-dir 03_outputs/metrics --figs-dir 03_outputs/figs \
+  --plan 00_plan.md --metrics-dir 03_outputs/metrics --figs-dir 03_outputs/figs \
   --src-dir 02_src --log 04_paper/main.log --pdf 04_paper/main.pdf \
   --render-pdf 03_outputs/_audit_pages \
   --ban-terms "<optional school/name terms>"
