@@ -2,7 +2,7 @@
 
 # `math-modeling-frontier`
 
-**面向新一代旗舰模型的极简双层数模竞赛工程 Skill（v1.1）**
+**面向新一代旗舰模型的极简双层数模竞赛工程 Skill（v1.2）**
 *Zero Cognitive Shackles · Dual-Tier Relay · O(1) Cross-Model Memory · Nature/Science Visuals · Zero-Transcription LaTeX*
 
 [![CI](https://github.com/monesy231/math-modeling-frontier/actions/workflows/ci.yml/badge.svg)](https://github.com/monesy231/math-modeling-frontier/actions/workflows/ci.yml)
@@ -64,21 +64,21 @@
 - **全局先贯通**：全题 `Q1 → Qn` 端到端 Baseline 跑通并落盘 `baseline.json`（过 `Gate P1`）之前，禁止在任何单问深挖高复杂度算法；通过门禁即 `git commit` 快照防改崩。
 - **防死等 + 防死磕**：重求解先小规模 `N` 冒烟并设显式超时；同一瓶颈连续 **3 次根因修复失败**、超时或出现破坏假设的数据异常，**立即停机禁止第 4 次盲修**，通过 `handoff.md` 交回旗舰 `[F]` 按 `L1 精确解 → L2 机理保真近似（附间隙/残差界）→ L3 解析上下界/蒙特卡洛区间` 体面降级。
 
-### 4. 数据 → 论文“零手抄”同步 + 过期硬拦截（0% 旧数幻觉）
+### 4. 数据 → 论文“零手抄”同步 + 过期与孤儿表硬拦截（0% 旧数/幽灵表幻觉）
 - 内置 [sync_metrics.py](./.agents/skills/math-modeling-frontier/scripts/sync_metrics.py)：
-  - 自动将 `03_outputs/metrics/*.json` 编译为盲审洁净的 `04_paper/generated_metrics.tex` 数值宏（自动拒绝 `NaN/Inf`、拦截重名宏、自动格式化 95% CI 区间），**半夜改代码重跑后全论文数字一键原子更新**；
-  - 自动将 `03_outputs/metrics/*.csv` 编译为右对齐、自动加粗最优值、零竖线的 **Booktabs 标准三线表**（`\input{generated_tables/*.tex}`）。
-- [audit_paper.py](./.agents/skills/math-modeling-frontier/scripts/audit_paper.py) 内置 **`[STALE_METRICS_TEX]` / `[STALE_TABLE_TEX]` 新鲜度硬门禁**：一旦某次重跑更新了 `.json`/`.csv` 却忘了同步 `.tex`，终审直接 `FAIL` 拦截。
+  - 自动将 `03_outputs/metrics/*.json` 编译为盲审洁净的 `04_paper/generated_metrics.tex` 数值宏（自动拒绝 `NaN/Inf`、**中文字段稳定生成唯一 ASCII 宏名、任何重名碰撞直接报错中止并列出双方原始键名**、自动格式化 95% CI 区间），**半夜改代码重跑后全论文数字一键原子更新**；
+  - 自动将 `03_outputs/metrics/*.csv` 编译为右对齐、自动加粗最优值、零竖线的 **Booktabs 标准三线表**（`\input{generated_tables/*.tex}`），同步记录 `_sync_manifest.json` 溯源清单并**自动清理已撤回实验的孤儿旧表**。
+- [audit_paper.py](./.agents/skills/math-modeling-frontier/scripts/audit_paper.py) 内置 **`[STALE_METRICS_TEX]` + `[ORPHAN_GENERATED_TABLE]` + `[MISSING_TABLE_SOURCE]` 三重硬门禁**：改代码忘同步或撤回 CSV 后正文仍引用旧表，终审直接 `FAIL` 拦截。
 
 ### 5. 大刊科研审美编入代码，1 行 `❌→✅` 精准校准不啰嗦
 - **图表审美靠代码不靠嘴**：[plot_style.py](./.agents/skills/math-modeling-frontier/scripts/plot_style.py) 内置 *Nature / Science / PNAS* 单栏（`3.5 in`）、1.5 栏（`5.0 in`）、双栏（`7.2 in`）物理宽度、色盲/灰度安全低饱和色板 + 线型/标记双冗余、`label_panels()`、`plot_with_ci()`、`plot_tornado()`、`plot_diverging_heatmap()`、`plot_pipeline_diagram()`、`add_zoom_inset()` 及 `.pdf` + 300 DPI `.png` 双导出防遮挡自检；[visual.md](./.agents/skills/math-modeling-frontier/references/visual.md) 仅 **8 行**。
 - **反防御与论文排版靠微对照**：写作（Step 5）与审稿（Step 6）**物理会话+文件双隔离**；[writing.md](./.agents/skills/math-modeling-frontier/references/writing.md) 仅 **20 行**，用 1 行 `❌→✅` 精准消灭 D1–D5 防御废话、试错日记、照搬题干和廉价竖线表，局限性统一收口到文末一节。
 
-### 6. 独立两阶段红队终审 + 章节感知去误报 + PDF 逐页渲染 + CI 保障
+### 6. 独立两阶段红队终审 + 缺件硬阻断 + 真 LaTeX 编译 CI 保障
 - Step 6 强制另开独立只读旗舰会话（**建议换用不同于写作模型的另一款旗舰模型交叉审稿**），先运行 [audit_paper.py](./.agents/skills/math-modeling-frontier/scripts/audit_paper.py)：
-  - **Stage 1 硬门禁（不通过直接阻断 Stage 2）**：自动核验 `00_plan.md` 最新赛制已全部确认、内部工程词零泄漏、正文/代码（`02_src/`）/PDF 元数据零匿名与路径泄漏、`\ref` 无断链、`generated_metrics.tex` 无过期、LaTeX 编译 `.log` 无报错；同时用 `--render-pdf` 将 `main.pdf` **逐页转成 PNG** 供多模态旗舰“肉眼”审查每一页版面，配合 10 点数值溯源与 L3 引文忠实度审计。
-  - **Stage 2 章节感知信号 + 最小手术精修（v1.1）**：自动识别 LaTeX/Markdown 章节标题与代码环境——**在文末 *Strengths, Weaknesses / Limitations / AI Report* 章节和代码附录中自动豁免 `D2/D5` 误报**，只在摘要/引言/建模/结果/结论里严抓防御性废话与 AI 腔，仅输出 `位置 | 类别 | 原句 | 建议替换` 手术表。
-- **跨平台 E2E 测试 + GitHub Actions CI（v1.1）**：内置 [tests/test_e2e_pipeline.py](./tests/test_e2e_pipeline.py) 覆盖全部 4 个脚本的正反路径与完整链路闭环，并在 Ubuntu + Windows 双系统矩阵持续验证。
+  - **Stage 1 硬门禁（缺件或渲染失败一律 `FAIL`，绝不静默返回 0）**：按 6 项必填字段逐项核验 `00_plan.md` 赛规与来源、内部工程词零泄漏、正文/代码（`02_src/`）/PDF 元数据零匿名与路径泄漏、`\ref` 无断链、无过期宏与孤儿表、指定的 `.pdf`/`.log`/目录必须真实存在且 `--render-pdf` 必须成功将 `main.pdf` **逐页转成 PNG** 供多模态旗舰“肉眼”审查每一页版面。
+  - **Stage 2 章节感知信号 + 最小手术精修**：自动识别 LaTeX/Markdown 章节标题与代码环境——**在文末 *Strengths, Weaknesses / Limitations / AI Report* 章节和代码附录中自动豁免 `D2/D5` 误报**，只在摘要/引言/建模/结果/结论里严抓防御性废话与 AI 腔，仅输出 `位置 | 类别 | 原句 | 建议替换` 手术表。
+- **真实交卷级 CI（Ubuntu 实编 `pdflatex` + Windows 跨平台矩阵）**：[tests/test_e2e_pipeline.py](./tests/test_e2e_pipeline.py) 不仅测试所有脚本正反路径，更在 Linux CI 中**实际调用 `pdflatex` 编译含中英文宏、三线表与 *Nature* 图件的 `main.tex → main.pdf`**，对同一次编译出的 `main.pdf` + `main.log` 跑通完整终审并渲染 PNG，随后删除 `main.pdf` 验证终审必然 `FAIL`。
 
 ---
 

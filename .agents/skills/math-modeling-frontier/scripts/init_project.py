@@ -119,7 +119,7 @@ def main() -> int:
 
 - **Initialized**: {now_str} | **Contest**: {args.contest} | **Problem**: {args.title} | **Lang**: {args.lang.upper()}
 
-## 0. Live Official Rules (Extracted from `00_problem/` — mark absent items `[待核验]`)
+## 0. Live Official Rules (Extracted from `00_problem/` — state concrete rule + source file, or `已核实不适用 (Source: <notice>)`)
 - **Format & Template**: `[EXTRACT FROM 00_problem/]`
 - **Deadline / Window**: `[EXTRACT FROM 00_problem/]`
 - **Hard Page / Word Limit**: `[EXTRACT FROM 00_problem/]`

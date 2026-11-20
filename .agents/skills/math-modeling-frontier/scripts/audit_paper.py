@@ -2,11 +2,13 @@
 """
 Deterministic Stage 1 (Hard Compliance), Section-Aware Stage 2 (Defensive /
 AI-Slop / Cheap-Table Signals), PDF Page Renderer (for multimodal page-by-page
-inspection), 00_plan.md Live-Rule Gate, and O(1) `handoff.md` Relay Validator.
+inspection), Field-by-Field 00_plan.md Live-Rule Gate, Orphan-Table Provenance
+Guard, and O(1) `handoff.md` Relay Validator (v1.2).
 
 Exit code:
   0 = Stage 1 / Handoff / Plan checks PASS
-  2 = Blocking hard failures detected (must fix before proceeding)
+  2 = Blocking hard failures detected (missing final artifacts, failed PDF render,
+      unverified contest rules, orphan/stale tables, leaks, or broken refs)
 """
 from __future__ import annotations
 
@@ -17,7 +19,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 # Stage 1 HARD FAIL: Internal workflow term leaks
 INTERNAL_LEAK_PATTERNS: List[Tuple[str, str]] = [
@@ -97,6 +99,24 @@ TEX_SECTION_RX = re.compile(r"\\(?:sub){0,2}section\*?(?:\[[^\]]*\])?\{([^}]+)\}
 MD_SECTION_RX = re.compile(r"^\s{0,3}#{1,3}\s+(.+?)\s*$")
 CODE_ENV_START_RX = re.compile(r"\\begin\{(?:verbatim|lstlisting|minted)\*?\}")
 CODE_ENV_END_RX = re.compile(r"\\end\{(?:verbatim|lstlisting|minted)\*?\}")
+
+# Mandatory field-by-field live official rule schema for 00_plan.md Sec. 0
+REQUIRED_PLAN_RULE_FIELDS: List[Tuple[str, str]] = [
+    ("Format & Template", r"(?:Format\s*&\s*Template|格式|模板)"),
+    ("Deadline / Window", r"(?:Deadline|Window|截止|赛程|时间)"),
+    ("Hard Page / Word Limit", r"(?:Page|Word\s*Limit|页数|字数)"),
+    ("Anonymity & Metadata", r"(?:Anonymity|Metadata|匿名|盲审|元数据)"),
+    ("AI Declaration Policy", r"(?:AI\s*(?:Declaration|Use|Usage|Policy)|人工智能|AI\s*声明|AI\s*政策)"),
+    ("Required Extras", r"(?:Required\s*Extras|Memo|附件|代码|查重)"),
+]
+RULE_PLACEHOLDER_RX = re.compile(
+    r"(?:\[EXTRACT FROM 00_problem/\]|\[待核验\]|\[待补充\]|^\s*(?:TBD|TODO|FIXME|XXX|N/A|NA|None|-|--|无)\s*$)",
+    re.IGNORECASE,
+)
+RULE_SOURCE_RX = re.compile(
+    r"(?:source\s*[:：]|from\s+|verified|not\s+applicable|n/a\s*\(|来源|依据|已核实|不适用|通知|章程|指南|官网|官方|notice|brochure|instructions?|rules?|guideline|https?://|\.(?:pdf|docx?|txt|md|html?)\b|00_problem/)",
+    re.IGNORECASE,
+)
 
 
 def collect_manuscript_files(target: Path) -> List[Path]:
@@ -202,7 +222,12 @@ def scan_stage2_section_aware(
 
 
 def check_plan_live_rules(plan_path: Optional[Path]) -> Tuple[List[str], List[str]]:
-    """Verify Section 0 of 00_plan.md has no unextracted or unverified official contest rules."""
+    """
+    Strictly validate Section 0 of 00_plan.md field-by-field:
+    - Section '## 0.' MUST exist.
+    - All 6 mandatory contest rule fields MUST exist with non-placeholder values
+      and an explicit source/official-notice or verified-N/A confirmation.
+    """
     if not plan_path:
         return [], []
     if not plan_path.is_file():
@@ -210,10 +235,9 @@ def check_plan_live_rules(plan_path: Optional[Path]) -> Tuple[List[str], List[st
 
     text = plan_path.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
+    sec0_lines: List[Tuple[int, str]] = []
     in_sec0 = False
     sec0_found = False
-    fails: List[str] = []
-    info: List[str] = []
 
     for lineno, line in enumerate(lines, start=1):
         if re.match(r"^\s*##\s*0\.", line):
@@ -223,15 +247,49 @@ def check_plan_live_rules(plan_path: Optional[Path]) -> Tuple[List[str], List[st
         if in_sec0 and re.match(r"^\s*##\s*[1-9]\.", line):
             break
         if in_sec0:
-            if "[EXTRACT FROM 00_problem/]" in line or "[待核验]" in line:
-                fails.append(
-                    f"[UNVERIFIED_CONTEST_RULE] {plan_path.name}:{lineno} still unresolved | {line.strip()[:95]}"
-                )
+            sec0_lines.append((lineno, line))
+
+    fails: List[str] = []
+    info: List[str] = []
 
     if not sec0_found:
-        info.append(f"  - Note: No '## 0.' Live Official Rules section found in {plan_path.name}")
-    else:
-        info.append(f"  - Checked Live Official Rules in {plan_path.name}")
+        return [f"[PLAN_SEC0_MISSING] {plan_path.name} is missing mandatory '## 0.' Live Official Rules section."], info
+
+    # Parse bullet lines of the form "- **Field**: value" or "- Field: value"
+    parsed_entries: List[Tuple[int, str, str]] = []
+    bullet_rx = re.compile(r"^\s*[-*]\s*\*{0,2}([^:*：]+?)\*{0,2}\s*[:：]\s*(.*)$")
+    for lineno, line in sec0_lines:
+        m = bullet_rx.match(line)
+        if m:
+            parsed_entries.append((lineno, m.group(1).strip(), m.group(2).strip()))
+
+    matched_count = 0
+    for canonical_name, key_pat in REQUIRED_PLAN_RULE_FIELDS:
+        rx = re.compile(key_pat, re.IGNORECASE)
+        match_entry = next((entry for entry in parsed_entries if rx.search(entry[1])), None)
+        if not match_entry:
+            fails.append(f"[MISSING_CONTEST_RULE] {plan_path.name} Sec. 0 is missing required field '{canonical_name}'")
+            continue
+
+        matched_count += 1
+        lineno, _, raw_val = match_entry
+        val = raw_val.strip().strip("`").strip()
+        if not val or RULE_PLACEHOLDER_RX.search(val):
+            fails.append(
+                f"[UNVERIFIED_CONTEST_RULE] {plan_path.name}:{lineno} '{canonical_name}' is empty or placeholder | {raw_val[:80]}"
+            )
+            continue
+        if len(val) < 6:
+            fails.append(
+                f"[UNVERIFIED_CONTEST_RULE] {plan_path.name}:{lineno} '{canonical_name}' is too vague ('{val}'); state concrete rule + source"
+            )
+            continue
+        if not RULE_SOURCE_RX.search(val):
+            fails.append(
+                f"[MISSING_RULE_SOURCE] {plan_path.name}:{lineno} '{canonical_name}' lacks explicit source or verified-N/A note | {val[:85]}"
+            )
+
+    info.append(f"  - Checked {matched_count}/{len(REQUIRED_PLAN_RULE_FIELDS)} mandatory rule field(s) in {plan_path.name} Sec. 0")
     return fails, info
 
 
@@ -272,10 +330,9 @@ def validate_handoff(
             fails.append(f"[HANDOFF_BROKEN_PTR] Referenced path does not exist: '{rel}' (under {root})")
     info.append(f"  - Verified {len(checked)} project pointer(s) under {root}")
 
-    # If relay has moved to Step 2+, automatically verify 00_plan.md Sec. 0 has no unconfirmed rules
     m_step = re.search(r"Current Step\*{0,2}:\s*`?Step\s*([2-6])", joined, re.IGNORECASE)
     plan_file = root / "00_plan.md"
-    if m_step and plan_file.is_file():
+    if m_step:
         p_fails, p_info = check_plan_live_rules(plan_file)
         fails.extend(p_fails)
         info.extend(p_info)
@@ -286,6 +343,9 @@ def validate_handoff(
 def render_pdf_pages(pdf_path: Path, out_dir: Path, dpi: int = 150) -> Tuple[List[Path], Optional[str]]:
     """Render each PDF page to PNG for multimodal visual page-by-page inspection."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Remove any stale page renders from previous runs
+    for old_png in out_dir.glob("page*.png"):
+        old_png.unlink(missing_ok=True)
 
     try:
         try:
@@ -303,6 +363,8 @@ def render_pdf_pages(pdf_path: Path, out_dir: Path, dpi: int = 150) -> Tuple[Lis
             pix.save(str(p))
             paths.append(p)
         doc.close()
+        if not paths:
+            return [], "PDF opened with 0 pages."
         return paths, None
     except Exception:
         pass
@@ -316,6 +378,8 @@ def render_pdf_pages(pdf_path: Path, out_dir: Path, dpi: int = 150) -> Tuple[Lis
             p = out_dir / f"page_{idx:02d}.png"
             img.save(str(p), "PNG")
             paths.append(p)
+        if not paths:
+            return [], "pdf2image produced 0 pages."
         return paths, None
     except Exception:
         pass
@@ -329,7 +393,9 @@ def render_pdf_pages(pdf_path: Path, out_dir: Path, dpi: int = 150) -> Tuple[Lis
             text=True,
         )
         if res.returncode == 0:
-            return sorted(out_dir.glob("page-*.png")), None
+            rendered = sorted(out_dir.glob("page-*.png"))
+            if rendered:
+                return rendered, None
 
     gs = shutil.which("gswin64c") or shutil.which("gs")
     if gs:
@@ -340,9 +406,11 @@ def render_pdf_pages(pdf_path: Path, out_dir: Path, dpi: int = 150) -> Tuple[Lis
             text=True,
         )
         if res.returncode == 0:
-            return sorted(out_dir.glob("page_*.png")), None
+            rendered = sorted(out_dir.glob("page_*.png"))
+            if rendered:
+                return rendered, None
 
-    return [], "No PDF rasterizer found (tried PyMuPDF, pdf2image, pdftoppm, ghostscript)."
+    return [], "PDF rasterization failed (no working PyMuPDF, pdf2image, pdftoppm, or ghostscript found)."
 
 
 def check_latex_refs_and_figs(
@@ -351,6 +419,10 @@ def check_latex_refs_and_figs(
 ) -> Tuple[List[str], List[str]]:
     hard_fails: List[str] = []
     warnings: List[str] = []
+
+    if figs_dir is not None and not figs_dir.is_dir():
+        hard_fails.append(f"[ARTIFACT_DIR_MISSING] Figures directory not found: {figs_dir}")
+        figs_dir = None
 
     labels: Set[str] = set()
     refs: List[Tuple[str, int, str]] = []
@@ -402,7 +474,7 @@ def check_latex_log(log_path: Optional[Path]) -> Tuple[List[str], List[str]]:
     if not log_path:
         return [], []
     if not log_path.is_file():
-        return [], [f"[LOG_MISSING] Compile log not found at {log_path}"]
+        return [f"[LOG_MISSING] Specified LaTeX compile log not found: {log_path}"], []
 
     hard_fails: List[str] = []
     warnings: List[str] = []
@@ -426,7 +498,7 @@ def check_pdf_metadata(pdf_path: Optional[Path], ban_terms: List[str]) -> Tuple[
     if not pdf_path:
         return [], [], []
     if not pdf_path.is_file():
-        return [], [f"[PDF_MISSING] Compiled PDF not found at {pdf_path}"], []
+        return [f"[PDF_MISSING] Specified compiled PDF not found: {pdf_path}"], [], []
 
     hard_fails: List[str] = []
     warnings: List[str] = []
@@ -445,16 +517,30 @@ def check_pdf_metadata(pdf_path: Optional[Path], ban_terms: List[str]) -> Tuple[
                 if v:
                     metadata_fields.append((str(k), str(v)))
     except Exception:
-        pages = re.findall(rb"/Type\s*/Page\b(?!s)", raw)
-        if pages:
-            page_count = len(pages)
-        for key in (b"Author", b"Title", b"Subject", b"Keywords", b"Creator"):
-            for m in re.finditer(rb"/" + key + rb"\s*\(([^)]{1,200})\)", raw):
-                val = m.group(1).decode("latin-1", errors="replace").strip()
-                if val:
-                    metadata_fields.append(("/" + key.decode(), val))
+        try:
+            try:
+                import pymupdf as fitz  # type: ignore
+            except ImportError:
+                import fitz  # type: ignore
 
-    info_lines.append(f"  - PDF: {pdf_path.name} | Estimated Pages: {page_count if page_count is not None else 'unknown'}")
+            doc = fitz.open(str(pdf_path))
+            page_count = len(doc)
+            if doc.metadata:
+                for k, v in doc.metadata.items():
+                    if v:
+                        metadata_fields.append((f"/{k.capitalize()}", str(v)))
+            doc.close()
+        except Exception:
+            pages = re.findall(rb"/Type\s*/Page\b(?!s)", raw)
+            if pages:
+                page_count = len(pages)
+            for key in (b"Author", b"Title", b"Subject", b"Keywords", b"Creator"):
+                for m in re.finditer(rb"/" + key + rb"\s*\(([^)]{1,200})\)", raw):
+                    val = m.group(1).decode("latin-1", errors="replace").strip()
+                    if val:
+                        metadata_fields.append(("/" + key.decode(), val))
+
+    info_lines.append(f"  - PDF: {pdf_path.name} | Pages: {page_count if page_count is not None else 'unknown'}")
     for k, v in metadata_fields:
         info_lines.append(f"  - Metadata {k}: {v}")
         if k.lower().endswith("author") and v.strip():
@@ -469,8 +555,10 @@ def check_pdf_metadata(pdf_path: Optional[Path], ban_terms: List[str]) -> Tuple[
 
 
 def check_src_paths(src_dir: Optional[Path], ban_terms: List[str]) -> List[str]:
-    if not src_dir or not src_dir.is_dir():
+    if src_dir is None:
         return []
+    if not src_dir.is_dir():
+        return [f"[ARTIFACT_DIR_MISSING] Source code directory not found: {src_dir}"]
     src_files = sorted(
         p for p in src_dir.rglob("*")
         if p.is_file() and p.suffix.lower() in {".py", ".m", ".r", ".jl", ".sh"}
@@ -485,37 +573,106 @@ def check_src_paths(src_dir: Optional[Path], ban_terms: List[str]) -> List[str]:
     ]
 
 
-def check_metrics_sync_freshness(target: Path, metrics_dir: Optional[Path]) -> List[str]:
-    if not metrics_dir or not metrics_dir.is_dir():
+def check_metrics_and_table_provenance(
+    target: Path,
+    files: List[Path],
+    metrics_dir: Optional[Path],
+) -> List[str]:
+    """
+    Verify:
+    1. metrics_dir exists if specified.
+    2. generated_metrics.tex and generated_tables/*.tex are not older than source JSON/CSV.
+    3. No orphan generated_tables/*.tex exists without a live source CSV.
+    4. Every manuscript \\input{...generated_tables/<stem>...} has BOTH a live source CSV and .tex file.
+    5. _sync_manifest.json (if present) has no deleted source JSON/CSV lingering unsynced.
+    """
+    if metrics_dir is None:
         return []
+    if not metrics_dir.is_dir():
+        return [f"[ARTIFACT_DIR_MISSING] Metrics directory not found: {metrics_dir}"]
+
     paper_dir = target if target.is_dir() else target.parent
     fails: List[str] = []
 
-    json_files = list(metrics_dir.glob("*.json"))
+    live_jsons = [p for p in metrics_dir.glob("*.json") if not p.name.startswith("_")]
+    live_csvs = [p for p in metrics_dir.glob("*.csv") if not p.name.startswith("_")]
+    live_csv_stems = {p.stem for p in live_csvs}
+    live_json_names = {p.name for p in live_jsons}
+
+    # Freshness: JSON -> generated_metrics.tex
     gen_metrics = paper_dir / "generated_metrics.tex"
-    if gen_metrics.is_file() and json_files:
-        newest_json = max(json_files, key=lambda p: p.stat().st_mtime)
+    if gen_metrics.is_file() and live_jsons:
+        newest_json = max(live_jsons, key=lambda p: p.stat().st_mtime)
         if newest_json.stat().st_mtime > gen_metrics.stat().st_mtime + 1.0:
             fails.append(
                 f"[STALE_METRICS_TEX] '{gen_metrics.name}' is older than '{newest_json.name}'. Re-run sync_metrics.py!"
             )
 
+    # Freshness + orphan detection: CSV <-> generated_tables/*.tex
     tables_dir = paper_dir / "generated_tables"
     if tables_dir.is_dir():
-        for csv_file in metrics_dir.glob("*.csv"):
+        for csv_file in live_csvs:
             gen_tbl = tables_dir / f"{csv_file.stem}.tex"
             if gen_tbl.is_file() and csv_file.stat().st_mtime > gen_tbl.stat().st_mtime + 1.0:
                 fails.append(
                     f"[STALE_TABLE_TEX] 'generated_tables/{gen_tbl.name}' is older than '{csv_file.name}'. Re-run sync_metrics.py!"
                 )
+        for gen_tbl in sorted(tables_dir.glob("*.tex")):
+            if gen_tbl.stem not in live_csv_stems:
+                fails.append(
+                    f"[ORPHAN_GENERATED_TABLE] 'generated_tables/{gen_tbl.name}' has no matching '{gen_tbl.stem}.csv' in {metrics_dir}. Re-run sync_metrics.py and update manuscript!"
+                )
+
+    # Manuscript \input{...generated_tables/<stem>...} provenance verification
+    tbl_input_rx = re.compile(r"\\(?:input|include)\{([^}]*generated_tables/([^}/]+?)(?:\.tex)?)\}")
+    for path in files:
+        if path.suffix.lower() != ".tex":
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if line.lstrip().startswith("%"):
+                continue
+            for m in tbl_input_rx.finditer(line):
+                raw_ref = m.group(1).strip()
+                stem = m.group(2).strip()
+                if stem not in live_csv_stems:
+                    fails.append(
+                        f"[MISSING_TABLE_SOURCE] {path.name}:{lineno} includes '{raw_ref}' but source '{stem}.csv' does not exist in {metrics_dir}"
+                    )
+                elif not (tables_dir / f"{stem}.tex").is_file():
+                    fails.append(
+                        f"[MISSING_GENERATED_TABLE] {path.name}:{lineno} includes '{raw_ref}' but 'generated_tables/{stem}.tex' is missing; run sync_metrics.py"
+                    )
+
+    # Manifest drift check (detect withdrawn JSON/CSV sources when sync_metrics wasn't re-run)
+    manifest_path = metrics_dir / "_sync_manifest.json"
+    if manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            for prev_json in manifest.get("json_sources", []):
+                if prev_json not in live_json_names:
+                    fails.append(
+                        f"[STALE_SYNC_MANIFEST] JSON source '{prev_json}' was removed since last sync. Re-run sync_metrics.py!"
+                    )
+            for prev_csv in manifest.get("csv_to_table", {}).keys():
+                if Path(prev_csv).stem not in live_csv_stems:
+                    fails.append(
+                        f"[STALE_SYNC_MANIFEST] CSV source '{prev_csv}' was removed since last sync. Re-run sync_metrics.py!"
+                    )
+        except Exception as exc:
+            fails.append(f"[MANIFEST_CORRUPT] Could not parse {manifest_path}: {exc}")
+
     return fails
 
 
 def summarize_metrics(metrics_dir: Optional[Path]) -> List[str]:
     if not metrics_dir or not metrics_dir.is_dir():
-        return ["[WARN] Metrics directory not found or not provided; manual numeric traceability required."]
+        return ["[WARN] Metrics directory not provided or missing; manual numeric traceability required."]
     lines: List[str] = []
-    files = sorted(p for p in metrics_dir.iterdir() if p.is_file() and p.suffix.lower() in {".json", ".csv"})
+    files = sorted(
+        p for p in metrics_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in {".json", ".csv"} and not p.name.startswith("_")
+    )
     if not files:
         return [f"[WARN] No .json or .csv metric files found in {metrics_dir}"]
     for p in files:
@@ -555,7 +712,7 @@ def main() -> int:
 
     total_hard_fails = 0
     print("=" * 72)
-    print("MATH MODELING FRONTIER AUDIT & RELAY VALIDATOR (v1.1)")
+    print("MATH MODELING FRONTIER AUDIT & RELAY VALIDATOR (v1.2)")
     print("=" * 72)
 
     # ---- OPTIONAL: O(1) HANDOFF RELAY CHECK ----
@@ -578,11 +735,11 @@ def main() -> int:
     # ---- OPTIONAL: 00_plan.md LIVE RULE CONFIRMATION CHECK ----
     if args.plan:
         p_fails, p_info = check_plan_live_rules(Path(args.plan))
-        print("\n[LIVE CONTEST RULES CHECK] (00_plan.md Sec. 0)")
+        print("\n[LIVE CONTEST RULES CHECK] (00_plan.md Sec. 0 — Field-by-Field)")
         for line in p_info:
             print(line)
         if not p_fails:
-            print("  -> PASS (all live official rules confirmed)")
+            print("  -> PASS (all 6 mandatory official rule fields verified with sources)")
         else:
             total_hard_fails += len(p_fails)
             for msg in p_fails:
@@ -594,26 +751,43 @@ def main() -> int:
         files = collect_manuscript_files(target)
         if not files:
             print(f"[ERROR] No .tex or .md files found at: {target}")
-            return 1
+            return 2
 
         ban_terms = [t.strip() for t in args.ban_terms.split(",") if t.strip()]
         stage1_patterns = list(INTERNAL_LEAK_PATTERNS) + list(PATH_LEAK_PATTERNS) + list(PLACEHOLDER_PATTERNS)
         for term in ban_terms:
             stage1_patterns.append(("ANONYMITY_BAN", re.escape(term)))
 
-        s1_hits = scan_patterns(files, stage1_patterns)
-        ref_fails, fig_warns = check_latex_refs_and_figs(files, Path(args.figs_dir) if args.figs_dir else None)
-        src_fails = check_src_paths(Path(args.src_dir) if args.src_dir else None, ban_terms)
-        sync_fails = check_metrics_sync_freshness(target, Path(args.metrics_dir) if args.metrics_dir else None)
-        log_fails, log_warns = check_latex_log(Path(args.log) if args.log else None)
+        metrics_path = Path(args.metrics_dir) if args.metrics_dir else None
+        figs_path = Path(args.figs_dir) if args.figs_dir else None
+        src_path = Path(args.src_dir) if args.src_dir else None
+        log_path = Path(args.log) if args.log else None
         pdf_path = Path(args.pdf) if args.pdf else None
+
+        s1_hits = scan_patterns(files, stage1_patterns)
+        ref_fails, fig_warns = check_latex_refs_and_figs(files, figs_path)
+        src_fails = check_src_paths(src_path, ban_terms)
+        sync_fails = check_metrics_and_table_provenance(target, files, metrics_path)
+        log_fails, log_warns = check_latex_log(log_path)
         pdf_fails, pdf_warns, pdf_info = check_pdf_metadata(pdf_path, ban_terms)
 
-        all_extra_fails = ref_fails + src_fails + sync_fails + log_fails + pdf_fails
+        render_fails: List[str] = []
+        rendered_pages: List[Path] = []
+        if args.render_pdf:
+            if not pdf_path or not pdf_path.is_file():
+                render_fails.append(
+                    f"[RENDER_PDF_MISSING] --render-pdf requested but valid --pdf file is missing ({pdf_path})"
+                )
+            else:
+                rendered_pages, err = render_pdf_pages(pdf_path, Path(args.render_pdf))
+                if err or not rendered_pages:
+                    render_fails.append(f"[RENDER_PDF_FAILED] {err or 'Rendered 0 pages'}")
+
+        all_extra_fails = ref_fails + src_fails + sync_fails + log_fails + pdf_fails + render_fails
         all_warns = fig_warns + log_warns + pdf_warns
         total_hard_fails += len(s1_hits) + len(all_extra_fails)
 
-        print(f"\n[STAGE 1] Hard Facts, Anti-Leak, Anonymity, Refs, Code, Sync, Log & PDF ({len(files)} file(s))")
+        print(f"\n[STAGE 1] Hard Facts, Anti-Leak, Anonymity, Refs, Code, Sync, Log, PDF & Render ({len(files)} file(s))")
         if not s1_hits and not all_extra_fails:
             print("  -> PASS (0 hard failures)")
         else:
@@ -632,20 +806,16 @@ def main() -> int:
             for line in pdf_info:
                 print(line)
 
-        if args.render_pdf and pdf_path and pdf_path.is_file():
-            pages, err = render_pdf_pages(pdf_path, Path(args.render_pdf))
+        if args.render_pdf and rendered_pages:
             print("\n[STAGE 1 PDF PAGE RENDERER]")
-            if err:
-                print(f"  [WARN] {err}")
-            else:
-                print(f"  -> Rendered {len(pages)} page(s) to {args.render_pdf} for visual inspection:")
-                for p in pages[:10]:
-                    print(f"     {p}")
-                if len(pages) > 10:
-                    print(f"     ... ({len(pages) - 10} more pages)")
+            print(f"  -> Rendered {len(rendered_pages)} page(s) to {args.render_pdf} for visual inspection:")
+            for p in rendered_pages[:10]:
+                print(f"     {p}")
+            if len(rendered_pages) > 10:
+                print(f"     ... ({len(rendered_pages) - 10} more pages)")
 
         print("\n[STAGE 1 METRICS INVENTORY FOR 10-POINT SPOT CHECK]")
-        for line in summarize_metrics(Path(args.metrics_dir) if args.metrics_dir else None):
+        for line in summarize_metrics(metrics_path):
             print(line)
 
         s2_hits, suppressed = scan_stage2_section_aware(files, DEFENSIVE_PATTERNS + AI_SLOP_PATTERNS)
