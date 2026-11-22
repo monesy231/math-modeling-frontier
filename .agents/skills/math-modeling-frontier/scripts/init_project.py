@@ -194,10 +194,10 @@ def main() -> int:
 ## 0. Live Official Rules (Extracted from `00_problem/` — state concrete rule + source file, or `已核实不适用 (Source: <notice>)`)
 - **Format & Template**: `[EXTRACT FROM 00_problem/]`
 - **Deadline / Window**: `[EXTRACT FROM 00_problem/]`
-- **Hard Page / Word Limit**: `[EXTRACT FROM 00_problem/]`
+- **Hard Page / Word Limit**: `[EXTRACT FROM 00_problem/]` *(note whether embedded companion sheets count toward the cap)*
 - **Anonymity & Metadata**: `[EXTRACT FROM 00_problem/]`
 - **AI Declaration Policy**: `[EXTRACT FROM 00_problem/]`
-- **Required Extras (Memo / Code / Data / Plagiarism)**: `[EXTRACT FROM 00_problem/]`
+- **Required Extras (Memo / Code / Data / Plagiarism / Official Metric Priority & Dual Clocks)**: `[EXTRACT FROM 00_problem/]`
 
 ## 1. Workflow Gate Tracker (Step 0 -> Step 6)
 
@@ -240,6 +240,7 @@ def main() -> int:
 | E2 | Baseline vs. Proposed | Identical split + 95% CI | `model_comparison.json` | Tab. 2 / Fig. 3 |
 | E3 | Ablation / Mechanism | Remove custom module | `ablation.json` | Tab. 2 |
 | E4 | Sensitivity (±5%, ±10%) | Top parameters + stress test | `sensitivity.json` | Fig. 5 / Fig. 6 |
+| E5 | Out-of-Time & Replay Audit | Frozen-prefix chronological split + tamper probes | `chronological.json`, `audit_probes.json` | Tab. 4 / App. |
 """
 
     log_md = f"""# 01_log.md — Cold Archival Ledger (Append-Only — NEVER Preload Into Normal Turns)
@@ -281,12 +282,26 @@ venv/
 *.nav
 *.snm
 
-# Audit scratch renders
+# Audit scratch renders & PDF page previews
 03_outputs/_audit_pages/
+03_outputs/_pdf_previews/
+_page_previews/
+*_page_previews/
+.pdf_previews/
 
 # OS
 .DS_Store
 Thumbs.db
+"""
+
+    gitattributes = """* text=auto eol=lf
+*.png binary
+*.pdf binary
+*.jpg binary
+*.jpeg binary
+*.xlsx binary
+*.xls binary
+*.zip binary
 """
 
     for target, content in [
@@ -294,6 +309,7 @@ Thumbs.db
         (root / "00_plan.md", plan_md),
         (root / "01_log.md", log_md),
         (root / ".gitignore", gitignore),
+        (root / ".gitattributes", gitattributes),
     ]:
         print(write_if_allowed(target, content, args.force))
 

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-End-to-end test suite for math-modeling-frontier v1.2 scripts:
-  - init_project.py
-  - plot_style.py (headless Agg backend)
+End-to-end test suite for math-modeling-frontier v1.5 scripts:
+  - init_project.py (O(1) workspace + SHA-256 raw seal)
+  - plot_style.py (headless Agg backend + group_close_points)
   - sync_metrics.py (Chinese/Unicode unique macros, collision abort, orphan pruning, manifest)
   - audit_paper.py (missing-artifact hard fail, failed PDF render hard fail,
-    field-by-field 00_plan.md Sec. 0 rule check, orphan table guard, section-aware Stage 2)
+    field-by-field 00_plan.md Sec. 0 rule & page-limit gate, cited supplementary figures,
+    cross-platform font guard, offline HTML dashboard check, deliverable CSV audit,
+    raw-data seal, orphan table guard, section-aware Stage 2)
   - Real pdflatex compilation E2E submission test (enforced in CI via REQUIRE_LATEX_E2E=1)
 
 Run:
@@ -138,6 +140,14 @@ class TestMathModelingFrontierPipeline(unittest.TestCase):
         pdf2, png2 = ps.save_fig(fig2, "pipeline_test", out_dir=str(out_dir))
         self.assertTrue(pdf2.is_file() and pdf2.stat().st_size > 1000)
         self.assertTrue(png2.is_file() and png2.stat().st_size > 1000)
+
+        fig3, ax3 = ps.create_journal_fig(1, 1, width="single", height=2.2)
+        ax3.scatter([0.1, 0.102, 0.85], [0.2, 0.201, 0.85])
+        ax3.set_xlim(0.0, 1.0)
+        ax3.set_ylim(0.0, 1.0)
+        clusters = ps.group_close_points(ax3, [(0.1, 0.2), (0.102, 0.201), (0.85, 0.85)], min_dist_pt=12.0)
+        self.assertEqual(clusters, [[0, 1], [2]])
+        ps.plt.close(fig3)
 
     def test_03_sync_metrics_chinese_keys_collision_abort_and_nan(self) -> None:
         run_py(INIT_SCRIPT, str(self.root))
@@ -375,6 +385,7 @@ class TestMathModelingFrontierPipeline(unittest.TestCase):
         )
         self.assertEqual(res_ok_render.returncode, 0, res_ok_render.stdout + res_ok_render.stderr)
         self.assertTrue((render_dir / "page_01.png").is_file())
+        self.assertTrue((render_dir / ".gitignore").is_file())
 
     def test_07_stage1_hard_gates_and_section_aware_stage2(self) -> None:
         run_py(INIT_SCRIPT, str(self.root))
@@ -623,8 +634,18 @@ Unfortunately, the stationary kernel is merely valid within $\pm 10\%$ perturbat
         self.assertEqual(res_del.returncode, 2)
         self.assertIn("RAW_DATA_DELETED", res_del.stdout)
 
-        # Restore notice.txt and test static code guard against scripts overwriting 01_data/raw/
+        # Restore notice.txt, verify dropping an unsealed mid-contest file hard-fails until re-locked
         prob_pdf.write_text("Official Contest Notice 2026\n", encoding="utf-8")
+        extra_tmpl = self.root / "00_problem" / "extra_template.md"
+        extra_tmpl.write_text("# Official Companion Template\n", encoding="utf-8")
+        res_unsealed_new = run_py(AUDIT_SCRIPT, "--verify-raw", str(self.root))
+        self.assertEqual(res_unsealed_new.returncode, 2)
+        self.assertIn("RAW_UNSEALED_FILE", res_unsealed_new.stdout)
+        self.assertEqual(run_py(INIT_SCRIPT, str(self.root), "--lock-raw").returncode, 0)
+        res_relocked = run_py(AUDIT_SCRIPT, "--verify-raw", str(self.root))
+        self.assertEqual(res_relocked.returncode, 0, res_relocked.stdout)
+
+        # Test static code guard against scripts overwriting 01_data/raw/
         (self.root / "02_src" / "bad_clean.py").write_text(
             'df.to_csv("01_data/raw/dataset.csv", index=False)\n',
             encoding="utf-8",
@@ -641,6 +662,272 @@ Unfortunately, the stationary kernel is merely valid within $\pm 10\%$ perturbat
         )
         self.assertEqual(res_write_guard.returncode, 2)
         self.assertIn("SRC_WRITES_RAW", res_write_guard.stdout)
+
+    def test_10_deliverable_csv_auditor(self) -> None:
+        self.assertEqual(run_py(INIT_SCRIPT, str(self.root)).returncode, 0)
+        self.assertTrue((self.root / ".gitattributes").is_file())
+
+        out_dir = self.root / "03_outputs" / "deliverables"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        alloc_csv = out_dir / "allocation.csv"
+
+        # 1. Clean UTF-8 CSV without BOM or duplicate keys -> PASS with 0 warnings
+        alloc_csv.write_text(
+            "提单号,子仓,提货时刻,配货方数,批次键\n"
+            "B-001,101,2026-10-02 00:00:00,10.5000,10\n"
+            "B-002,260,2026-10-02 00:00:00,8.2500,11\n",
+            encoding="utf-8",
+        )
+        res_clean = run_py(AUDIT_SCRIPT, "--check-csv", str(out_dir), "--strict-csv")
+        self.assertEqual(res_clean.returncode, 0, res_clean.stdout)
+        self.assertIn("PASS (0 hard CSV failures)", res_clean.stdout)
+
+        # 2. UTF-8 BOM (utf-8-sig) + unmerged duplicate decision-variable keys -> WARN by default, FAIL under --strict-csv
+        alloc_csv.write_text(
+            "提单号,子仓,提货时刻,配货方数,批次键\n"
+            "B-001,101,2026-10-02 00:00:00,6.0000,10\n"
+            "B-001,101,2026-10-02 00:00:00,4.5000,10\n",
+            encoding="utf-8-sig",
+        )
+        res_warn = run_py(AUDIT_SCRIPT, "--check-csv", str(alloc_csv))
+        self.assertEqual(res_warn.returncode, 0)
+        self.assertIn("CSV_UTF8_BOM", res_warn.stdout)
+        self.assertIn("CSV_UNMERGED_DUPLICATE_KEY", res_warn.stdout)
+
+        res_strict = run_py(AUDIT_SCRIPT, "--check-csv", str(alloc_csv), "--strict-csv")
+        self.assertEqual(res_strict.returncode, 2)
+        self.assertIn("CSV_UTF8_BOM", res_strict.stdout)
+        self.assertIn("CSV_UNMERGED_DUPLICATE_KEY", res_strict.stdout)
+
+        # 3. NaN/Inf or exact duplicate row -> HARD FAIL even without --strict-csv
+        alloc_csv.write_text(
+            "提单号,子仓,提货时刻,配货方数,批次键\n"
+            "B-001,101,2026-10-02 00:00:00,NaN,10\n"
+            "B-002,260,2026-10-02 00:00:00,8.2500,11\n"
+            "B-002,260,2026-10-02 00:00:00,8.2500,11\n",
+            encoding="utf-8",
+        )
+        res_bad = run_py(AUDIT_SCRIPT, "--check-csv", str(alloc_csv))
+        self.assertEqual(res_bad.returncode, 2)
+        self.assertIn("CSV_NAN_OR_INF", res_bad.stdout)
+        self.assertIn("CSV_EXACT_DUPLICATE_ROW", res_bad.stdout)
+
+    def test_11_companion_rules_degenerate_change_and_page_mismatch(self) -> None:
+        self.assertEqual(run_py(INIT_SCRIPT, str(self.root)).returncode, 0)
+        paper_md = self.root / "04_paper" / "report.md"
+        companion_md = self.root / "作品说明单.md"
+        verifier_py = self.root / "02_src" / "audit_submission.py"
+
+        # 1. Bad prose: degenerate "由 X 降至 X", >60-char summary, template instruction leak, unsafe zip, and page mismatch
+        paper_md.write_text(
+            "# 建模与实验报告\n\n"
+            "反事实对照表明全期满票由 2,586 票降至 2,586，且误差 decreased from 14.2% to 14.2%。\n"
+            "已生成 15 页技术报告。\n",
+            encoding="utf-8",
+        )
+        companion_md.write_text(
+            "# 作品说明单\n"
+            "> 引用块（以 `>` 开头）是填写提示，定稿时请删除。\n\n"
+            "## 01 队伍与赛题\n"
+            "| 队伍名称 | 参赛队名（提交前按官方报名表填写） |\n\n"
+            "## 02 一句话概述\n"
+            "这是一段故意超过六十个字符限制的一句话概述文本，用来测试自动化终审脚本能否精准拦截作品说明单字数超标的问题并给出明确报错提示信息。\n",
+            encoding="utf-8",
+        )
+        verifier_py.write_text(
+            "def check_rows(sr, br):\n"
+            "    for s_row, b_row in zip(sr, br):\n"
+            "        assert s_row == b_row\n",
+            encoding="utf-8",
+        )
+        pdf_path = self.root / "04_paper" / "report.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n1 0 obj << /Type /Page >> endobj\n")
+
+        res_fail = run_py(
+            AUDIT_SCRIPT,
+            str(paper_md),
+            "--src-dir",
+            str(self.root / "02_src"),
+            "--pdf",
+            str(pdf_path),
+        )
+        self.assertEqual(res_fail.returncode, 2)
+        self.assertIn("DEGENERATE_CHANGE", res_fail.stdout)
+        self.assertIn("TEMPLATE_INSTRUCTION_LEAK", res_fail.stdout)
+        self.assertIn("SUMMARY_OVER_60_CHARS", res_fail.stdout)
+        self.assertIn("PDF_PAGE_COUNT_MISMATCH", res_fail.stdout)
+        self.assertIn("REGISTRATION_PLACEHOLDER", res_fail.stdout)
+        self.assertIn("SRC_UNSAFE_ZIP_COMPARE", res_fail.stdout)
+
+        # 2. Clean prose: valid transition "由 2,589 票降至 2,586", unit conversion "由 2,586 万元降至 2,586 元",
+        #    <=60-char summary, zip_longest in verifier, and no page-count mismatch -> PASS
+        paper_md.write_text(
+            "# 建模与实验报告\n\n"
+            "反事实对照表明全期满票由 2,589 票降至 2,586（单位换算示例：由 2,586 万元降至 2,586 元）。\n",
+            encoding="utf-8",
+        )
+        companion_md.write_text(
+            "# 作品说明单\n\n"
+            "## 02 一句话概述\n"
+            "针对跨境空运货源与舱位提单动态配载，提出因果时域滚动拼载算法RH-MWRA，2.2s达成100%评估满票并五维占优。\n",
+            encoding="utf-8",
+        )
+        verifier_py.write_text(
+            "from itertools import zip_longest\n"
+            "def check_rows(sr, br):\n"
+            "    for s_row, b_row in zip_longest(sr, br):\n"
+            "        assert s_row == b_row\n",
+            encoding="utf-8",
+        )
+        res_ok = run_py(
+            AUDIT_SCRIPT,
+            str(paper_md),
+            "--src-dir",
+            str(self.root / "02_src"),
+            "--pdf",
+            str(pdf_path),
+        )
+        self.assertEqual(res_ok.returncode, 0, res_ok.stdout)
+        self.assertIn("58/60 chars", res_ok.stdout)
+
+    def test_12_v15_page_limit_supp_figs_font_portability_and_html_audit(self) -> None:
+        from matplotlib.backends.backend_pdf import PdfPages
+        import matplotlib.pyplot as plt
+
+        self.assertEqual(run_py(INIT_SCRIPT, str(self.root)).returncode, 0)
+        plan_path = self.root / "00_plan.md"
+        paper_dir = self.root / "04_paper"
+        figs_dir = self.root / "03_outputs" / "figs"
+        src_dir = self.root / "02_src"
+
+        def write_plan_with_page_rule(rule_line: str) -> None:
+            plan_path.write_text(
+                "# 00_plan.md\n\n"
+                "## 0. Live Official Rules\n"
+                "- **Format & Template**: Markdown + PDF (Source: 00_problem/notice.md)\n"
+                "- **Deadline / Window**: Dec 9 23:59 (Source: 00_problem/notice.md)\n"
+                f"- **Hard Page / Word Limit**: {rule_line}\n"
+                "- **Anonymity & Metadata**: Verified team header (Source: 00_problem/notice.md)\n"
+                "- **AI Declaration Policy**: Log AI usage (Source: 00_problem/notice.md)\n"
+                "- **Required Extras**: Runnable code + CSV (Source: 00_problem/notice.md)\n\n"
+                "## 1. Workflow\n",
+                encoding="utf-8",
+            )
+
+        # 1. Generate real 12-page PDF and prepare embedded, path-cited supplementary, and orphan figures
+        pdf_12 = paper_dir / "report.pdf"
+        with PdfPages(pdf_12) as pp:
+            for idx in range(12):
+                fig_p = plt.figure(figsize=(3.5, 2.5))
+                fig_p.text(0.5, 0.5, f"Page {idx + 1}", ha="center", va="center")
+                pp.savefig(fig_p)
+                plt.close(fig_p)
+
+        for fname in ("fig_embed.png", "fig_supp.png", "fig_orphan.png"):
+            (figs_dir / fname).write_bytes(b"PNG_PLACEHOLDER")
+
+        paper_md = paper_dir / "report.md"
+        paper_md.write_text(
+            "# Report\n\n"
+            "![Main Figure](../03_outputs/figs/fig_embed.png)\n\n"
+            "Full dynamics appear in supplementary file `03_outputs/figs/fig_supp.png`.\n",
+            encoding="utf-8",
+        )
+
+        # 2. Unguarded OS font path in 04_paper/build_report.py triggers [SRC_OS_FONT_HARDCODE]
+        builder_py = paper_dir / "build_report.py"
+        builder_py.write_text(
+            'FONT_PATH = r"C:\\Windows\\Fonts\\simhei.ttf"\n',
+            encoding="utf-8",
+        )
+
+        # 10-page hard cap in 00_plan.md MUST fail 12-page PDF with PDF_OVER_PAGE_LIMIT
+        write_plan_with_page_rule("一般不超过 10 页，一句话概述 <= 60 字（Source: 00_problem/notice.md）")
+        res_over = run_py(
+            AUDIT_SCRIPT,
+            str(paper_md),
+            "--plan",
+            str(plan_path),
+            "--figs-dir",
+            str(figs_dir),
+            "--src-dir",
+            str(src_dir),
+            "--pdf",
+            str(pdf_12),
+        )
+        self.assertEqual(res_over.returncode, 2)
+        self.assertIn("PDF_OVER_PAGE_LIMIT", res_over.stdout)
+        self.assertIn("SRC_OS_FONT_HARDCODE", res_over.stdout)
+        self.assertIn("Cited supplementary figure(s) by path: fig_supp.png", res_over.stdout)
+        self.assertIn("Figure 'fig_orphan'", res_over.stdout)
+        self.assertNotIn("Figure 'fig_embed'", res_over.stdout)
+        self.assertNotIn("Figure 'fig_supp'", res_over.stdout)
+
+        # --max-pages 12 overrides and passes; adding font fallback clears SRC_OS_FONT_HARDCODE
+        builder_py.write_text(
+            "from pathlib import Path\n"
+            'p = Path(r"C:\\Windows\\Fonts\\simhei.ttf")\n'
+            'font_name = "Custom" if p.is_file() else "STSong-Light"\n',
+            encoding="utf-8",
+        )
+        res_override = run_py(
+            AUDIT_SCRIPT,
+            str(paper_md),
+            "--plan",
+            str(plan_path),
+            "--figs-dir",
+            str(figs_dir),
+            "--src-dir",
+            str(src_dir),
+            "--pdf",
+            str(pdf_12),
+            "--max-pages",
+            "12",
+        )
+        self.assertEqual(res_override.returncode, 0, res_override.stdout)
+        self.assertIn("Pages: 12 (hard limit <= 12)", res_override.stdout)
+        self.assertNotIn("SRC_OS_FONT_HARDCODE", res_override.stdout)
+
+        # Soft target range with explicit no-limit phrase MUST NOT trigger PDF_OVER_PAGE_LIMIT
+        write_plan_with_page_rule("No strict hard cap; target 20-28 pages (Source: 00_problem/notice.md)")
+        res_soft = run_py(
+            AUDIT_SCRIPT,
+            str(paper_md),
+            "--plan",
+            str(plan_path),
+            "--pdf",
+            str(pdf_12),
+        )
+        self.assertEqual(res_soft.returncode, 0, res_soft.stdout)
+        self.assertNotIn("PDF_OVER_PAGE_LIMIT", res_soft.stdout)
+
+        # 3. Offline HTML dashboard audit (--check-html)
+        html_path = self.root / "03_outputs" / "dashboard.html"
+        html_path.write_text(
+            "<!doctype html><html><head>\n"
+            '<script src="https://cdn.example.com/lib.js"></script>\n'
+            "</head><body><p>Ready after Gate R</p>\n"
+            "<script>const broken = {;</script>\n"
+            "</body></html>\n",
+            encoding="utf-8",
+        )
+        res_html_bad = run_py(AUDIT_SCRIPT, "--check-html", str(html_path))
+        self.assertEqual(res_html_bad.returncode, 2)
+        self.assertIn("INTERNAL_LEAK", res_html_bad.stdout)
+        self.assertIn("HTML_EXTERNAL_DEP", res_html_bad.stdout)
+        if shutil.which("node"):
+            self.assertIn("HTML_JS_SYNTAX_ERROR", res_html_bad.stdout)
+
+        html_path.write_text(
+            "<!doctype html><html><body><div id='app'></div>\n"
+            "<script>const metrics = {fill: 1.0}; console.log(metrics.fill);</script>\n"
+            "</body></html>\n",
+            encoding="utf-8",
+        )
+        res_html_ok = run_py(AUDIT_SCRIPT, "--check-html", str(html_path))
+        self.assertEqual(res_html_ok.returncode, 0, res_html_ok.stdout)
+        self.assertIn("PASS (0 hard HTML failures)", res_html_ok.stdout)
+        self.assertNotIn("[WARN]", res_html_ok.stdout)
 
 
 if __name__ == "__main__":

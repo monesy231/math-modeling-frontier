@@ -2,23 +2,28 @@
 """
 Deterministic Stage 1 (Hard Compliance), Section-Aware Stage 2 (Defensive /
 AI-Slop / Cheap-Table Signals), PDF Page Renderer (for multimodal page-by-page
-inspection), Field-by-Field 00_plan.md Live-Rule Gate, Orphan-Table Provenance
-Guard, and O(1) `handoff.md` Relay Validator (v1.2).
+inspection), Field-by-Field 00_plan.md Live-Rule & Page-Limit Gate, Orphan-Table
+Provenance Guard, Offline HTML Dashboard Auditor, and O(1) `handoff.md` Relay
+Validator (v1.5).
 
 Exit code:
   0 = Stage 1 / Handoff / Plan checks PASS
   2 = Blocking hard failures detected (missing final artifacts, failed PDF render,
-      unverified contest rules, orphan/stale tables, leaks, or broken refs)
+      over-page-limit PDF, unverified contest rules, orphan/stale tables, leaks,
+      broken refs, unsealed raw files, or broken CSV/HTML deliverables)
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
+from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -50,12 +55,17 @@ PATH_LEAK_PATTERNS: List[Tuple[str, str]] = [
     ("PATH_LEAK", r"file:///"),
 ]
 
-# Stage 1 HARD FAIL: Unfinished placeholders
+# Stage 1 HARD FAIL: Unfinished placeholders & unremoved official template prompts
 PLACEHOLDER_PATTERNS: List[Tuple[str, str]] = [
     ("PLACEHOLDER", r"\b(?:TODO|TBD|FIXME|XXX)\b"),
     ("PLACEHOLDER", r"\[待核验\]"),
     ("PLACEHOLDER", r"\[待补充\]"),
     ("PLACEHOLDER", r"\[\?\?\]"),
+    ("TEMPLATE_INSTRUCTION_LEAK", r"引用块（以\s*`?>`?\s*开头）是填写提示"),
+    ("TEMPLATE_INSTRUCTION_LEAK", r"定稿时请删除"),
+    ("TEMPLATE_INSTRUCTION_LEAK", r"（如：O1\s*爆品早知道）"),
+    ("TEMPLATE_INSTRUCTION_LEAK", r"（例：某某大模型"),
+    ("TEMPLATE_INSTRUCTION_LEAK", r"（采纳\s*/\s*修改后采纳\s*/\s*弃用）"),
 ]
 
 # Stage 2 STYLE SIGNAL: D1-D5 Defensive writing triggers (EN + ZH)
@@ -92,7 +102,7 @@ AI_SLOP_PATTERNS: List[Tuple[str, str]] = [
 # Section headings where legitimate discussion of boundaries/weaknesses is expected
 LIMITATION_SECTION_RX = re.compile(
     r"(?:strengths?|weakness|limitation|further\s+discussion|future\s+work|report\s+on\s+use\s+of\s+ai|ai\s+usage"
-    r"|优缺点|局限|不足|模型评价|模型改进|讨论与展望|人工智能使用)",
+    r"|优缺点|局限|不足|模型评价|模型改进|讨论与展望|人工智能使用|纠错记录|小结|需要说明的限制)",
     re.IGNORECASE,
 )
 LIMITATION_EXEMPT_CODES: Set[str] = {"D2_NON_CLAIM", "D5_SELF_SABOTAGE"}
@@ -120,15 +130,132 @@ RULE_SOURCE_RX = re.compile(
 )
 
 
-def collect_manuscript_files(target: Path) -> List[Path]:
+def collect_manuscript_files(
+    target: Path,
+    project_root: Optional[Path] = None,
+    extra_companions: Optional[List[str]] = None,
+) -> List[Path]:
+    files: List[Path] = []
     if target.is_file():
-        return [target]
-    if target.is_dir():
-        return sorted(
-            p for p in target.rglob("*")
-            if p.is_file() and p.suffix.lower() in {".tex", ".md"}
+        files.append(target)
+    elif target.is_dir():
+        files.extend(
+            sorted(
+                p for p in target.rglob("*")
+                if p.is_file() and p.suffix.lower() in {".tex", ".md"}
+            )
         )
-    return []
+
+    # Auto-discover root-level official companion deliverables (作品说明单*.md, AI协作记录*.md)
+    t_res = target.resolve()
+    root_cand: Optional[Path] = project_root.resolve() if project_root else None
+    if root_cand is None:
+        if t_res.is_file() and t_res.parent.name == "04_paper":
+            root_cand = t_res.parent.parent
+        elif t_res.is_dir() and t_res.name == "04_paper":
+            root_cand = t_res.parent
+
+    seen_resolved = {p.resolve() for p in files}
+    if root_cand and root_cand.is_dir():
+        for pat in ("作品说明单*.md", "AI协作记录*.md"):
+            for comp in sorted(root_cand.glob(pat)):
+                if comp.is_file() and "模板" not in comp.name and comp.resolve() not in seen_resolved:
+                    files.append(comp)
+                    seen_resolved.add(comp.resolve())
+
+    for raw_c in extra_companions or []:
+        cp = Path(raw_c)
+        if cp.is_file() and cp.resolve() not in seen_resolved:
+            files.append(cp)
+            seen_resolved.add(cp.resolve())
+
+    return files
+
+
+def check_prose_integrity_and_companion_rules(
+    files: List[Path],
+) -> Tuple[List[str], List[str], List[str]]:
+    """
+    Check manuscript and companion deliverables for:
+    1. [DEGENERATE_CHANGE] Self-contradictory '由 X 降至 X' / '从 X 升至 X' / 'increased/decreased from X to X'
+       where start and end numbers are identical and units do not change.
+    2. [SUMMARY_OVER_60_CHARS] Official '## 02 一句话概述' section exceeding the 60-character limit.
+    3. [REGISTRATION_PLACEHOLDER] Pre-submission team name / member count reminders in 作品说明单.
+    """
+    hard_fails: List[str] = []
+    warnings: List[str] = []
+    info_lines: List[str] = []
+
+    zh_unit_pat = r"(?:m³|km|kg|ms|pp|h|s|d|%|万元|元|张|票|批|个|次|天|秒|小时)?"
+    zh_degen_rx = re.compile(
+        rf"(?:由|从)\s*\**(?<![\d.])([+-]?\d[\d,]*(?:\.\d+)?%?)\**\s*({zh_unit_pat})\s*"
+        rf"(?:降至|升至|增至|跌至|提高到|提高至|下降到|下降至|减少到|减少至|增加到|增加至|跃升至|回落至|缩减至|改善至)\s*"
+        rf"\**\1\**(?![\d.])\s*({zh_unit_pat})"
+    )
+    en_degen_rx = re.compile(
+        r"\b(?:increased|decreased|dropped|rose|fell|improved|reduced|grew|declined|shifted|changed)\s+"
+        r"from\s+\**(?<![\d.])([+-]?\d[\d,]*(?:\.\d+)?%?)\**(?:\s*([a-zA-Z%]{1,6}))?\s+"
+        r"to\s+\**\1\**(?![\d.])(?:\s*([a-zA-Z%]{1,6}))?",
+        re.IGNORECASE,
+    )
+    reg_placeholder_rx = re.compile(
+        r"(?:提交前按官方报名表填写|按实际报名人数填写|（含队长，1[—–\-]4\s*人）)"
+    )
+    summary_sec_rx = re.compile(r"^\s*##\s*0?2\s+一句话概述\s*$")
+    any_h2_rx = re.compile(r"^\s*##\s+")
+
+    for path in files:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        lines = text.splitlines()
+
+        for lineno, line in enumerate(lines, start=1):
+            for rx in (zh_degen_rx, en_degen_rx):
+                for m in rx.finditer(line):
+                    u1 = (m.group(2) or "").strip()
+                    u2 = (m.group(3) or "").strip()
+                    if u1 and u2 and u1.lower() != u2.lower():
+                        continue
+                    snippet = line.strip()
+                    if len(snippet) > 110:
+                        snippet = snippet[:107] + "..."
+                    hard_fails.append(
+                        f"[DEGENERATE_CHANGE] {path.name}:{lineno} self-contradictory identical transition '{m.group(0)}' | {snippet}"
+                    )
+
+            m_reg = reg_placeholder_rx.search(line)
+            if m_reg:
+                warnings.append(
+                    f"[REGISTRATION_PLACEHOLDER] {path.name}:{lineno} contains team registration reminder '{m_reg.group(0)}' (fill actual team name & headcount before final upload)"
+                )
+
+        # Check '## 02 一句话概述' <= 60 chars if present
+        for idx, line in enumerate(lines):
+            if summary_sec_rx.match(line):
+                sec_lineno = idx + 1
+                body_parts: List[str] = []
+                for sub_line in lines[idx + 1:]:
+                    if any_h2_rx.match(sub_line):
+                        break
+                    s = sub_line.strip()
+                    if not s or s.startswith(">") or s.startswith("---"):
+                        continue
+                    body_parts.append(s.replace("**", ""))
+                summary_text = " ".join(body_parts).strip()
+                char_len = len(summary_text)
+                if char_len == 0:
+                    hard_fails.append(
+                        f"[SUMMARY_EMPTY] {path.name}:{sec_lineno} '02 一句话概述' is empty"
+                    )
+                elif char_len > 60:
+                    hard_fails.append(
+                        f"[SUMMARY_OVER_60_CHARS] {path.name}:{sec_lineno} '02 一句话概述' has {char_len} chars (official cap <= 60): '{summary_text}'"
+                    )
+                else:
+                    info_lines.append(
+                        f"  - Executive Summary ('02 一句话概述' in {path.name}): {char_len}/60 chars"
+                    )
+
+    return hard_fails, warnings, info_lines
 
 
 def scan_patterns(
@@ -294,6 +421,58 @@ def check_plan_live_rules(plan_path: Optional[Path]) -> Tuple[List[str], List[st
     return fails, info
 
 
+def extract_plan_max_pages(plan_path: Optional[Path]) -> Optional[Tuple[int, str]]:
+    """
+    Extract an explicit hard page upper limit from `00_plan.md` Sec. 0's
+    `Hard Page / Word Limit` bullet, returning `(max_pages, matched_phrase)` or `None`.
+    """
+    if not plan_path or not plan_path.is_file():
+        return None
+    text = plan_path.read_text(encoding="utf-8", errors="replace")
+    sec0_lines: List[str] = []
+    in_sec0 = False
+    for line in text.splitlines():
+        if re.match(r"^\s*##\s*0\.", line):
+            in_sec0 = True
+            continue
+        if in_sec0 and re.match(r"^\s*##\s*[1-9]\.", line):
+            break
+        if in_sec0:
+            sec0_lines.append(line)
+    if not sec0_lines:
+        return None
+
+    bullet_rx = re.compile(r"^\s*[-*]\s*\*{0,2}([^:*：]+?)\*{0,2}\s*[:：]\s*(.*)$")
+    page_key_rx = re.compile(r"(?:Page|Word\s*Limit|页数|字数)", re.IGNORECASE)
+    negation_rx = re.compile(
+        r"(?:no\s+(?:strict\s+|hard\s+)?(?:page\s+)?(?:limit|cap)|unlimited|无(?:硬性)?(?:页数)?限制|不限页数|无页数上限)",
+        re.IGNORECASE,
+    )
+    cap_rxs = [
+        re.compile(
+            r"(?:不超过|至多|不得超过|上限(?:为)?|最多|≤|<=|max(?:imum)?(?:\s+of)?|at\s+most|no\s+more\s+than|up\s+to|"
+            r"(?:hard\s+)?(?:page\s+)?(?:cap|limit)(?:\s+of|\s*[:：])?)\s*(\d{1,3})\s*(?:页|pages?\b)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"(\d{1,3})\s*(?:页|pages?\b)\s*(?:以内|以下|上限|max\b|maximum\b|cap\b|limit\b)",
+            re.IGNORECASE,
+        ),
+    ]
+    for line in sec0_lines:
+        m = bullet_rx.match(line)
+        if not m or not page_key_rx.search(m.group(1)):
+            continue
+        val = m.group(2).strip()
+        if negation_rx.search(val):
+            return None
+        for rx in cap_rxs:
+            cm = rx.search(val)
+            if cm:
+                return int(cm.group(1)), cm.group(0).strip()
+    return None
+
+
 def validate_handoff(
     handoff_path: Path,
     project_root: Optional[Path] = None,
@@ -344,6 +523,13 @@ def validate_handoff(
 def render_pdf_pages(pdf_path: Path, out_dir: Path, dpi: int = 150) -> Tuple[List[Path], Optional[str]]:
     """Render each PDF page to PNG for multimodal visual page-by-page inspection."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Auto-write .gitignore inside the preview directory so temporary PNGs never pollute git status / git add -A
+    gitignore_path = out_dir / ".gitignore"
+    if not gitignore_path.exists():
+        try:
+            gitignore_path.write_text("*\n", encoding="utf-8")
+        except Exception:
+            pass
     # Remove any stale page renders from previous runs
     for old_png in out_dir.glob("page*.png"):
         old_png.unlink(missing_ok=True)
@@ -417,9 +603,10 @@ def render_pdf_pages(pdf_path: Path, out_dir: Path, dpi: int = 150) -> Tuple[Lis
 def check_latex_refs_and_figs(
     files: List[Path],
     figs_dir: Optional[Path],
-) -> Tuple[List[str], List[str]]:
+) -> Tuple[List[str], List[str], List[str]]:
     hard_fails: List[str] = []
     warnings: List[str] = []
+    info_lines: List[str] = []
 
     if figs_dir is not None and not figs_dir.is_dir():
         hard_fails.append(f"[ARTIFACT_DIR_MISSING] Figures directory not found: {figs_dir}")
@@ -428,6 +615,7 @@ def check_latex_refs_and_figs(
     labels: Set[str] = set()
     refs: List[Tuple[str, int, str]] = []
     included_figs: List[Tuple[str, int, str]] = []
+    non_comment_lines: List[str] = []
 
     label_rx = re.compile(r"\\label\{([^}]+)\}")
     ref_rx = re.compile(r"\\(?:eq|auto|c|C)?ref\{([^}]+)\}")
@@ -439,6 +627,7 @@ def check_latex_refs_and_figs(
         for lineno, line in enumerate(text.splitlines(), start=1):
             if path.suffix.lower() == ".tex" and line.lstrip().startswith("%"):
                 continue
+            non_comment_lines.append(line)
             for m in label_rx.finditer(line):
                 labels.add(m.group(1).strip())
             for m in ref_rx.finditer(line):
@@ -454,21 +643,37 @@ def check_latex_refs_and_figs(
             hard_fails.append(f"[BROKEN_REF] {fname}:{lineno} references undefined label '{key}'")
 
     if figs_dir and figs_dir.is_dir():
-        disk_stems = {
-            p.stem for p in figs_dir.iterdir()
-            if p.is_file() and p.suffix.lower() in {".pdf", ".png", ".eps", ".svg"}
-        }
+        stem_to_filenames: Dict[str, List[str]] = {}
+        for p in sorted(figs_dir.iterdir()):
+            if p.is_file() and p.suffix.lower() in {".pdf", ".png", ".eps", ".svg"}:
+                stem_to_filenames.setdefault(p.stem, []).append(p.name)
+        disk_stems = set(stem_to_filenames.keys())
         used_stems = {Path(raw).stem for _, _, raw in included_figs}
+        combined_text = "\n".join(non_comment_lines)
 
         for fname, lineno, raw in included_figs:
             stem = Path(raw).stem
             if stem not in disk_stems:
                 warnings.append(f"[FIG_NOT_IN_FIGS_DIR] {fname}:{lineno} includes '{raw}' (stem '{stem}' not in {figs_dir})")
 
+        cited_supp: List[str] = []
         for stem in sorted(disk_stems - used_stems):
-            warnings.append(f"[UNUSED_FIG] Figure '{stem}' exists in {figs_dir} but is not included in manuscript")
+            fnames = stem_to_filenames[stem]
+            matched_fn = next(
+                (
+                    fn for fn in fnames
+                    if re.search(rf"(?<![A-Za-z0-9_]){re.escape(fn)}(?![A-Za-z0-9_])", combined_text)
+                ),
+                None,
+            )
+            if matched_fn:
+                cited_supp.append(matched_fn)
+            else:
+                warnings.append(f"[UNUSED_FIG] Figure '{stem}' exists in {figs_dir} but is not included in manuscript")
+        if cited_supp:
+            info_lines.append(f"  - Cited supplementary figure(s) by path: {', '.join(cited_supp)}")
 
-    return hard_fails, warnings
+    return hard_fails, warnings, info_lines
 
 
 def check_latex_log(log_path: Optional[Path]) -> Tuple[List[str], List[str]]:
@@ -495,7 +700,13 @@ def check_latex_log(log_path: Optional[Path]) -> Tuple[List[str], List[str]]:
     return hard_fails, warnings
 
 
-def check_pdf_metadata(pdf_path: Optional[Path], ban_terms: List[str]) -> Tuple[List[str], List[str], List[str]]:
+def check_pdf_metadata(
+    pdf_path: Optional[Path],
+    ban_terms: List[str],
+    claim_sources: Optional[List[Tuple[str, str]]] = None,
+    max_pages: Optional[int] = None,
+    max_pages_source: Optional[str] = None,
+) -> Tuple[List[str], List[str], List[str]]:
     if not pdf_path:
         return [], [], []
     if not pdf_path.is_file():
@@ -508,6 +719,7 @@ def check_pdf_metadata(pdf_path: Optional[Path], ban_terms: List[str]) -> Tuple[
 
     page_count: Optional[int] = None
     metadata_fields: List[Tuple[str, str]] = []
+    page_texts: List[Tuple[int, str]] = []
     try:
         from pypdf import PdfReader  # type: ignore
 
@@ -517,6 +729,11 @@ def check_pdf_metadata(pdf_path: Optional[Path], ban_terms: List[str]) -> Tuple[
             for k, v in reader.metadata.items():
                 if v:
                     metadata_fields.append((str(k), str(v)))
+        for idx, page in enumerate(reader.pages, start=1):
+            try:
+                page_texts.append((idx, page.extract_text() or ""))
+            except Exception:
+                pass
     except Exception:
         try:
             try:
@@ -530,18 +747,30 @@ def check_pdf_metadata(pdf_path: Optional[Path], ban_terms: List[str]) -> Tuple[
                 for k, v in doc.metadata.items():
                     if v:
                         metadata_fields.append((f"/{k.capitalize()}", str(v)))
+            for idx, page in enumerate(doc, start=1):
+                try:
+                    page_texts.append((idx, page.get_text("text") or ""))
+                except Exception:
+                    pass
             doc.close()
         except Exception:
-            pages = re.findall(rb"/Type\s*/Page\b(?!s)", raw)
-            if pages:
-                page_count = len(pages)
-            for key in (b"Author", b"Title", b"Subject", b"Keywords", b"Creator"):
-                for m in re.finditer(rb"/" + key + rb"\s*\(([^)]{1,200})\)", raw):
-                    val = m.group(1).decode("latin-1", errors="replace").strip()
-                    if val:
-                        metadata_fields.append(("/" + key.decode(), val))
+            pass
 
-    info_lines.append(f"  - PDF: {pdf_path.name} | Pages: {page_count if page_count is not None else 'unknown'}")
+    if not page_count:
+        pages = re.findall(rb"/Type\s*/Page\b(?!s)", raw)
+        if pages:
+            page_count = len(pages)
+    if not metadata_fields:
+        for key in (b"Author", b"Title", b"Subject", b"Keywords", b"Creator"):
+            for m in re.finditer(rb"/" + key + rb"\s*\(([^)]{1,200})\)", raw):
+                val = m.group(1).decode("latin-1", errors="replace").strip()
+                if val:
+                    metadata_fields.append(("/" + key.decode(), val))
+
+    page_summary = str(page_count) if page_count is not None else "unknown"
+    if max_pages is not None:
+        page_summary += f" (hard limit <= {max_pages})"
+    info_lines.append(f"  - PDF: {pdf_path.name} | Pages: {page_summary}")
     for k, v in metadata_fields:
         info_lines.append(f"  - Metadata {k}: {v}")
         if k.lower().endswith("author") and v.strip():
@@ -551,6 +780,70 @@ def check_pdf_metadata(pdf_path: Optional[Path], ban_terms: List[str]) -> Tuple[
                 hard_fails.append(f"[PDF_META_BAN] PDF metadata {k} contains banned term '{term}': '{v}'")
         if re.search(r"(?:[A-Za-z]:\\Users\\|/Users/|/home/)", v):
             hard_fails.append(f"[PDF_META_PATH] PDF metadata {k} leaks local path: '{v}'")
+
+    # Scan extracted PDF page text for tofu replacement glyphs (\ufffd) and unrendered LaTeX macros
+    unrendered_latex_rx = re.compile(
+        r"\\(?:frac\s*\{|sum\s*[_^]|prod\s*[_^]|int\s*[_^]|mathbf\s*\{|mathrm\s*\{|mathbb\s*\{|mathcal\s*\{|"
+        r"left\s*[\(\[\{\|]|right\s*[\)\]\}\|]|toprule\b|midrule\b|bottomrule\b|begin\s*\{(?:equation|align|tabular|array))"
+    )
+    for pno, ptext in page_texts:
+        if "\ufffd" in ptext:
+            hard_fails.append(
+                f"[PDF_TOFU_GLYPH] {pdf_path.name} page {pno} contains replacement character '\\ufffd' (missing font glyph)"
+            )
+        m_latex = unrendered_latex_rx.search(ptext)
+        if m_latex:
+            snippet = ptext[max(0, m_latex.start() - 20): min(len(ptext), m_latex.end() + 30)].replace("\n", " ")
+            hard_fails.append(
+                f"[PDF_UNRENDERED_LATEX] {pdf_path.name} page {pno} contains raw uncompiled LaTeX '{m_latex.group(0)}' | {snippet}"
+            )
+
+    # Verify hard page limit and self-claimed report page counts
+    if page_count is not None and page_count > 0:
+        if max_pages is not None and page_count > max_pages:
+            src_note = f" ({max_pages_source})" if max_pages_source else ""
+            hard_fails.append(
+                f"[PDF_OVER_PAGE_LIMIT] {pdf_path.name} has {page_count} page(s), exceeding hard limit of {max_pages} page(s){src_note}"
+            )
+
+        zh_page_claim_rx = re.compile(
+            r"(?<![第\d\-–—~至到/])(\d{1,3})\s*页(?:无错\s*|整洁\s*|完整\s*|正式\s*|技术\s*|建模与实验\s*|实验\s*|方案\s*|PDF\s*)+"
+            r"(?:技术\s*|正式\s*|建模与实验\s*|实验\s*|方案\s*)?(?:报告|论文|PDF)"
+        )
+        zh_total_claim_rx = re.compile(r"(?:报告|论文|PDF)全本共\s*(\d{1,3})\s*页")
+        en_page_claim_rx = re.compile(
+            r"\b(\d{1,3})-page\s+(?:technical\s+|final\s+|complete\s+|modeling\s+|PDF\s+)*(?:report|paper|manuscript|PDF)\b",
+            re.IGNORECASE,
+        )
+        all_sources: List[Tuple[str, str]] = list(claim_sources or [])
+        for pno, ptext in page_texts:
+            all_sources.append((f"{pdf_path.name}:page_{pno}", ptext))
+
+        reported_mismatch_sources: Set[str] = set()
+        for src_label, src_text in all_sources:
+            for rx in (zh_page_claim_rx, zh_total_claim_rx, en_page_claim_rx):
+                for m in rx.finditer(src_text):
+                    claimed_n = int(m.group(1))
+                    if claimed_n < 4:
+                        continue
+                    if claimed_n != page_count and src_label not in reported_mismatch_sources:
+                        reported_mismatch_sources.add(src_label)
+                        hard_fails.append(
+                            f"[PDF_PAGE_COUNT_MISMATCH] {src_label} claims a {claimed_n}-page report ('{m.group(0)}'), "
+                            f"but compiled PDF '{pdf_path.name}' has {page_count} page(s)"
+                        )
+
+        # Check for sparse trailing-page overflow on multi-page PDFs
+        if page_count >= 5 and len(page_texts) == page_count:
+            char_counts = [len("".join(pt.split())) for _, pt in page_texts]
+            earlier = sorted(char_counts[:-1])
+            median_earlier = earlier[len(earlier) // 2] if earlier else 0
+            last_chars = char_counts[-1]
+            if median_earlier >= 600 and last_chars < min(380, int(median_earlier * 0.35)):
+                warnings.append(
+                    f"[PDF_SPARSE_LAST_PAGE] {pdf_path.name} last page (page {page_count}) has only {last_chars} non-whitespace chars "
+                    f"(median earlier page: {median_earlier}); check for accidental trailing page spill"
+                )
 
     return hard_fails, warnings, info_lines
 
@@ -615,27 +908,45 @@ def verify_raw_data_integrity(project_root: Path, require_seal: bool = True) -> 
             verified += 1
 
     for unsealed in sorted(live_originals - set(sealed_files.keys())):
-        warns.append(
-            f"[RAW_UNSEALED_FILE] New file '{unsealed}' is not yet in .raw_checksums.json; run 'init_project.py --lock-raw'."
+        msg = (
+            f"[RAW_UNSEALED_FILE] New file '{unsealed}' is not yet in .raw_checksums.json; "
+            f"run 'init_project.py <root> --lock-raw'."
         )
+        if require_seal:
+            fails.append(msg)
+        else:
+            warns.append(msg)
 
     info.append(f"  - Verified {verified}/{len(sealed_files)} sealed original file(s) in 00_problem/ & 01_data/raw/")
     return fails, warns, info
 
 
-def check_src_paths(src_dir: Optional[Path], ban_terms: List[str]) -> List[str]:
+def check_src_paths(
+    src_dir: Optional[Path],
+    ban_terms: List[str],
+    extra_py_dirs: Optional[List[Path]] = None,
+) -> Tuple[List[str], List[str]]:
     if src_dir is None:
-        return []
+        return [], []
     if not src_dir.is_dir():
-        return [f"[ARTIFACT_DIR_MISSING] Source code directory not found: {src_dir}"]
-    src_files = sorted(
-        p for p in src_dir.rglob("*")
-        if p.is_file() and p.suffix.lower() in {".py", ".m", ".r", ".jl", ".sh"}
-    )
+        return [f"[ARTIFACT_DIR_MISSING] Source code directory not found: {src_dir}"], []
+
+    src_files_map: Dict[Path, Path] = {}
+    for p in sorted(src_dir.rglob("*")):
+        if p.is_file() and p.suffix.lower() in {".py", ".m", ".r", ".jl", ".sh"}:
+            src_files_map[p.resolve()] = p
+    for extra_dir in extra_py_dirs or []:
+        if extra_dir.is_dir():
+            for p in sorted(extra_dir.glob("*.py")):
+                if p.is_file():
+                    src_files_map.setdefault(p.resolve(), p)
+    src_files = sorted(src_files_map.values(), key=lambda p: p.as_posix())
+
     pats = list(PATH_LEAK_PATTERNS)
     for term in ban_terms:
         pats.append(("SRC_BAN", re.escape(term)))
     hits = scan_patterns(src_files, pats)
+    warns: List[str] = []
 
     # Guard against scripts writing/deleting inside immutable 01_data/raw/ or 00_problem/
     raw_dir_rx = re.compile(r"(?:01_data[/\\]+raw|00_problem)", re.IGNORECASE)
@@ -645,19 +956,42 @@ def check_src_paths(src_dir: Optional[Path], ban_terms: List[str]) -> List[str]:
         re.compile(r"open\s*\([^)]*,\s*['\"][wax+]", re.IGNORECASE),
         re.compile(r"(?:os\.remove|os\.unlink|shutil\.move|shutil\.rmtree|\.unlink)\s*\(", re.IGNORECASE),
     ]
+    bare_zip_rx = re.compile(r"\bfor\s+[^:\n]+\s+in\s+(?:enumerate\s*\(\s*)?zip\s*\(([^)]+)\)")
+    verifier_name_rx = re.compile(r"(?:audit|verify|check|validate)", re.IGNORECASE)
+    os_font_rx = re.compile(
+        r"(?:[A-Za-z]:[/\\]+Windows[/\\]+Fonts|WINDIR[^\n]*Fonts|/System/Library/Fonts|/Library/Fonts)",
+        re.IGNORECASE,
+    )
+    font_fallback_rx = re.compile(
+        r"(?:UnicodeCIDFont|STSong-Light|get_data_path|is_file\s*\(|os\.path\.isfile|os\.path\.exists|\.exists\s*\(|except\s+(?:OSError|FileNotFoundError|Exception))"
+    )
+
     for path in src_files:
         text = path.read_text(encoding="utf-8", errors="replace")
+        is_verifier = bool(verifier_name_rx.search(path.stem))
+        if path.suffix.lower() == ".py" and os_font_rx.search(text) and not font_fallback_rx.search(text):
+            warns.append(
+                f"[SRC_OS_FONT_HARDCODE] {path.name} references an OS-specific font directory without an apparent cross-platform fallback check"
+            )
         for lineno, line in enumerate(text.splitlines(), start=1):
             if line.lstrip().startswith("#"):
                 continue
             if raw_dir_rx.search(line) and any(rx.search(line) for rx in raw_write_rxs):
                 snippet = line.strip()[:110]
                 hits.append((path.name, lineno, "SRC_WRITES_RAW", "01_data/raw or 00_problem write", snippet))
+            if is_verifier:
+                m_zip = bare_zip_rx.search(line)
+                if m_zip and "strict" not in m_zip.group(1):
+                    warns.append(
+                        f"[SRC_UNSAFE_ZIP_COMPARE] {path.name}:{lineno} uses bare 'zip(...)' without 'strict=True' or 'zip_longest'; "
+                        f"trailing extra rows in compared files can be silently ignored"
+                    )
 
-    return [
+    fails = [
         f"[{code}] {fname}:{lineno} matched '{matched}' | {snippet}"
         for fname, lineno, code, matched, snippet in hits
     ]
+    return fails, warns
 
 
 def check_metrics_and_table_provenance(
@@ -776,6 +1110,263 @@ def summarize_metrics(metrics_dir: Optional[Path]) -> List[str]:
     return lines
 
 
+def check_deliverable_csvs(
+    csv_targets: List[str],
+    strict_csv: bool = False,
+) -> Tuple[List[str], List[str], List[str]]:
+    """
+    Audit exported competition deliverable CSV files (e.g. allocation.csv, indicators.csv):
+    - [CSV_MISSING] target path/dir does not exist
+    - [CSV_UTF8_BOM] file starts with UTF-8 BOM (ef bb bf / utf-8-sig), which can break standard UTF-8 grading parsers
+    - [CSV_EMPTY] / [CSV_RAGGED_ROW] empty header, blank column names, or inconsistent column count
+    - [CSV_NAN_OR_INF] NaN / Inf / null / None / Excel error tokens in any cell
+    - [CSV_EXACT_DUPLICATE_ROW] identical duplicate rows
+    - [CSV_UNMERGED_DUPLICATE_KEY] unaggregated duplicate composite entity/decision-variable keys
+    """
+    hard_fails: List[str] = []
+    warnings: List[str] = []
+    info_lines: List[str] = []
+
+    csv_files: List[Path] = []
+    for raw_target in csv_targets:
+        for part in raw_target.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            p = Path(part)
+            if not p.exists():
+                hard_fails.append(f"[CSV_MISSING] Specified deliverable CSV path not found: {p}")
+                continue
+            if p.is_file():
+                if p.suffix.lower() == ".csv":
+                    csv_files.append(p)
+            elif p.is_dir():
+                found = sorted(f for f in p.rglob("*.csv") if f.is_file() and not f.name.startswith("_"))
+                if not found:
+                    warnings.append(f"[CSV_DIR_EMPTY] No .csv files found under directory: {p}")
+                csv_files.extend(found)
+
+    bad_token_rx = re.compile(r"^(?:nan|inf|-inf|\+inf|null|none|#n/a|#div/0!|#value!|#ref!|#name\?)$", re.IGNORECASE)
+    decimal_float_rx = re.compile(r"^[+-]?\d+\.\d+$")
+    key_name_rx = re.compile(r"(?:id|key|code|no|num|号|键|码|单|批|仓)", re.IGNORECASE)
+
+    for csv_path in csv_files:
+        raw_bytes = csv_path.read_bytes()
+        has_bom = raw_bytes.startswith(b"\xef\xbb\xbf")
+        if has_bom:
+            bom_msg = (
+                f"[CSV_UTF8_BOM] {csv_path.name} has UTF-8 BOM (utf-8-sig); standard UTF-8 grading parsers may see "
+                f"'\\ufeff' on the first header column. Prefer encoding='utf-8' unless Excel BOM is required."
+            )
+            if strict_csv:
+                hard_fails.append(bom_msg)
+            else:
+                warnings.append(bom_msg)
+
+        text = raw_bytes.decode("utf-8-sig" if has_bom else "utf-8", errors="replace")
+        rows = list(csv.reader(text.splitlines()))
+        if not rows:
+            hard_fails.append(f"[CSV_EMPTY] {csv_path.name} is empty (0 rows)")
+            continue
+
+        header = [c.strip() for c in rows[0]]
+        ncols = len(header)
+        if ncols == 0 or any(not h for h in header):
+            hard_fails.append(f"[CSV_EMPTY_HEADER] {csv_path.name} has empty or blank column header: {header}")
+            continue
+
+        data_rows = rows[1:]
+        ragged_count = 0
+        bad_cell_hits: List[str] = []
+        for r_idx, row in enumerate(data_rows, start=2):
+            if len(row) != ncols:
+                ragged_count += 1
+                if ragged_count <= 3:
+                    hard_fails.append(
+                        f"[CSV_RAGGED_ROW] {csv_path.name}:{r_idx} has {len(row)} columns (expected {ncols})"
+                    )
+                continue
+            for c_idx, val in enumerate(row):
+                s = val.strip()
+                if bad_token_rx.match(s):
+                    if len(bad_cell_hits) < 5:
+                        bad_cell_hits.append(f"row {r_idx} col '{header[c_idx]}'='{s}'")
+
+        if bad_cell_hits:
+            hard_fails.append(
+                f"[CSV_NAN_OR_INF] {csv_path.name} contains invalid token(s): {', '.join(bad_cell_hits)}"
+            )
+
+        valid_rows = [tuple(r) for r in data_rows if len(r) == ncols]
+        row_counts = Counter(valid_rows)
+        exact_dups = sum(cnt - 1 for cnt in row_counts.values() if cnt > 1)
+        if exact_dups > 0:
+            sample_dup = next(r for r, cnt in row_counts.items() if cnt > 1)
+            hard_fails.append(
+                f"[CSV_EXACT_DUPLICATE_ROW] {csv_path.name} contains {exact_dups} exact duplicate row(s), e.g. {sample_dup[:4]}"
+            )
+
+        # Check for unmerged duplicate decision-variable / entity keys in allocation/ledger tables:
+        # When a table has >=3 columns, 1..2 decimal-float quantity columns, and >=2 discrete non-float columns
+        # (including at least one ID/key column), duplicate discrete-key tuples indicate split rows that were not merged.
+        if ncols >= 3 and len(valid_rows) >= 2 and exact_dups == 0:
+            float_cols: List[int] = []
+            discrete_cols: List[int] = []
+            sample_slice = valid_rows[: min(len(valid_rows), 500)]
+            for c_idx in range(ncols):
+                non_empty = [r[c_idx].strip() for r in sample_slice if r[c_idx].strip()]
+                if non_empty and all(decimal_float_rx.match(v) for v in non_empty):
+                    float_cols.append(c_idx)
+                else:
+                    discrete_cols.append(c_idx)
+            has_id_col = any(key_name_rx.search(header[c]) for c in discrete_cols)
+            if 1 <= len(float_cols) <= 2 and len(discrete_cols) >= 2 and has_id_col:
+                key_counts = Counter(tuple(r[c] for c in discrete_cols) for r in valid_rows)
+                dup_keys = [(k, cnt) for k, cnt in key_counts.items() if cnt > 1]
+                if dup_keys:
+                    key_names = "+".join(header[c] for c in discrete_cols)
+                    sample_k, sample_cnt = dup_keys[0]
+                    dup_msg = (
+                        f"[CSV_UNMERGED_DUPLICATE_KEY] {csv_path.name} has {len(dup_keys)} duplicate composite key(s) "
+                        f"on ({key_names}) with separate unmerged quantities (e.g. {sample_k} appears {sample_cnt}x). "
+                        f"Aggregate split allocations by primary key before exporting."
+                    )
+                    if strict_csv:
+                        hard_fails.append(dup_msg)
+                    else:
+                        warnings.append(dup_msg)
+
+        info_lines.append(
+            f"  - {csv_path.name}: {len(data_rows)} row(s), {ncols} col(s), encoding={'UTF-8-BOM' if has_bom else 'UTF-8'}"
+        )
+
+    return hard_fails, warnings, info_lines
+
+
+def check_deliverable_html(
+    html_targets: List[str],
+    ban_terms: List[str],
+) -> Tuple[List[str], List[str], List[str]]:
+    """
+    Audit self-contained offline HTML dashboard deliverables:
+    - [HTML_MISSING] target path/dir does not exist
+    - [HTML_EMPTY] file is empty or lacks basic HTML markup
+    - [INTERNAL_LEAK] / [PATH_LEAK] / [HTML_BAN] leaked workflow tokens, local paths, or banned terms
+    - [HTML_EXTERNAL_DEP] (warn) external http(s) <script src=...> or <link href=...> CDN dependency
+    - [HTML_JS_SYNTAX_ERROR] inline JavaScript syntax error via `node --check` (when Node.js is available)
+    """
+    hard_fails: List[str] = []
+    warnings: List[str] = []
+    info_lines: List[str] = []
+
+    html_files: List[Path] = []
+    for raw_target in html_targets:
+        for part in raw_target.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            p = Path(part)
+            if not p.exists():
+                hard_fails.append(f"[HTML_MISSING] Specified HTML deliverable path not found: {p}")
+                continue
+            if p.is_file():
+                if p.suffix.lower() in {".html", ".htm"}:
+                    html_files.append(p)
+            elif p.is_dir():
+                found = sorted(
+                    f for f in p.rglob("*")
+                    if f.is_file() and f.suffix.lower() in {".html", ".htm"} and not f.name.startswith("_")
+                )
+                if not found:
+                    warnings.append(f"[HTML_DIR_EMPTY] No .html/.htm files found under directory: {p}")
+                html_files.extend(found)
+
+    if not html_files:
+        return hard_fails, warnings, info_lines
+
+    leak_pats = list(INTERNAL_LEAK_PATTERNS) + list(PATH_LEAK_PATTERNS)
+    for term in ban_terms:
+        leak_pats.append(("HTML_BAN", re.escape(term)))
+    compiled_leaks = [(code, re.compile(pat, re.IGNORECASE)) for code, pat in leak_pats]
+
+    ext_script_rx = re.compile(r"<script\b[^>]*\bsrc\s*=\s*['\"]https?://[^'\"]+['\"]", re.IGNORECASE)
+    ext_link_rx = re.compile(r"<link\b[^>]*\bhref\s*=\s*['\"]https?://[^'\"]+['\"]", re.IGNORECASE)
+    script_block_rx = re.compile(r"<script\b([^>]*)>(.*?)</script>", re.DOTALL | re.IGNORECASE)
+    src_attr_rx = re.compile(r"\bsrc\s*=", re.IGNORECASE)
+    type_attr_rx = re.compile(r"\btype\s*=\s*['\"]?([^'\"\s>]+)", re.IGNORECASE)
+    js_types = {"", "text/javascript", "application/javascript", "module"}
+    node_exe = shutil.which("node")
+
+    for html_path in html_files:
+        text = html_path.read_text(encoding="utf-8", errors="replace")
+        lower = text.lower()
+        if not text.strip() or ("<html" not in lower and "<body" not in lower and "<script" not in lower):
+            hard_fails.append(f"[HTML_EMPTY] {html_path.name} is empty or missing basic HTML markup")
+            continue
+
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            for code, rx in compiled_leaks:
+                m = rx.search(line)
+                if m:
+                    snippet = line.strip()
+                    if len(snippet) > 110:
+                        snippet = snippet[:107] + "..."
+                    hard_fails.append(
+                        f"[{code}] {html_path.name}:{lineno} matched '{m.group(0)}' | {snippet}"
+                    )
+            for ext_rx in (ext_script_rx, ext_link_rx):
+                m_ext = ext_rx.search(line)
+                if m_ext:
+                    warnings.append(
+                        f"[HTML_EXTERNAL_DEP] {html_path.name}:{lineno} references external HTTP(S) asset: {m_ext.group(0)[:100]}"
+                    )
+
+        js_blocks: List[str] = []
+        for m_sc in script_block_rx.finditer(text):
+            attrs, body = m_sc.group(1) or "", m_sc.group(2) or ""
+            if src_attr_rx.search(attrs):
+                continue
+            m_type = type_attr_rx.search(attrs)
+            sc_type = m_type.group(1).strip().lower() if m_type else ""
+            if sc_type in js_types and body.strip():
+                js_blocks.append(body)
+
+        js_status = "no inline JS"
+        if js_blocks:
+            if node_exe:
+                combined_js = "\n;\n".join(js_blocks) + "\n"
+                tmp_path: Optional[Path] = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        mode="w", suffix=".js", encoding="utf-8", delete=False
+                    ) as tf:
+                        tf.write(combined_js)
+                        tmp_path = Path(tf.name)
+                    res = subprocess.run(
+                        [node_exe, "--check", str(tmp_path)],
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                    )
+                    if res.returncode != 0:
+                        err_txt = (res.stderr or res.stdout or "syntax error").strip().splitlines()
+                        err_snippet = " | ".join(err_txt[:3])[:160]
+                        hard_fails.append(f"[HTML_JS_SYNTAX_ERROR] {html_path.name}: {err_snippet}")
+                        js_status = f"JS syntax FAIL ({len(js_blocks)} script block(s))"
+                    else:
+                        js_status = f"JS syntax PASS via node --check ({len(js_blocks)} script block(s))"
+                finally:
+                    if tmp_path is not None:
+                        tmp_path.unlink(missing_ok=True)
+            else:
+                js_status = f"{len(js_blocks)} inline JS block(s) (node not found; syntax check skipped)"
+
+        info_lines.append(f"  - {html_path.name}: {len(text.splitlines())} line(s), {js_status}")
+
+    return hard_fails, warnings, info_lines
+
+
 def _ensure_utf8_stdio() -> None:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -798,19 +1389,57 @@ def main() -> int:
     parser.add_argument("--verify-raw", type=str, default=None, help="Project root to verify SHA-256 immutability of 00_problem/ & 01_data/raw/")
     parser.add_argument("--log", type=str, default=None, help="Path to LaTeX compile .log file")
     parser.add_argument("--pdf", type=str, default=None, help="Path to compiled .pdf for metadata/page check")
-    parser.add_argument("--render-pdf", type=str, default=None, help="Output dir to rasterize PDF pages to PNGs")
+    parser.add_argument("--max-pages", type=int, default=None, help="Hard upper PDF page limit (overrides 00_plan.md Sec. 0)")
+    parser.add_argument(
+        "--render-pdf",
+        nargs="?",
+        const="03_outputs/_pdf_previews",
+        default=None,
+        help="Output dir to rasterize PDF pages to PNGs (default if flag given without path: 03_outputs/_pdf_previews)",
+    )
+    parser.add_argument(
+        "--check-csv",
+        action="append",
+        default=[],
+        help="Deliverable CSV file or directory to audit for BOM, NaN/Inf, ragged rows, and duplicate keys (repeatable)",
+    )
+    parser.add_argument(
+        "--strict-csv",
+        action="store_true",
+        help="Treat UTF-8 BOM and unmerged duplicate composite keys in deliverable CSVs as hard failures",
+    )
+    parser.add_argument(
+        "--check-html",
+        action="append",
+        default=[],
+        help="Offline HTML dashboard file or directory to audit for leaks, external CDNs, and inline JS syntax (repeatable)",
+    )
     parser.add_argument("--check-handoff", type=str, default=None, help="Validate O(1) handoff.md relay contract")
     parser.add_argument("--max-lines", type=int, default=80, help="Hard line cap for handoff.md (default: 80)")
     parser.add_argument("--project-root", type=str, default=None, help="Project root for verifying handoff pointers")
+    parser.add_argument(
+        "--companion",
+        action="append",
+        default=[],
+        help="Additional official companion markdown file(s) to audit (e.g. 作品说明单.md, AI协作记录.md)",
+    )
     parser.add_argument("--ban-terms", type=str, default="", help="Comma-separated custom anonymity terms to ban")
     args = parser.parse_args()
 
-    if not args.paper and not args.check_handoff and not args.plan and not args.verify_raw:
-        parser.error("Provide a manuscript path, --check-handoff, --plan, and/or --verify-raw.")
+    if (
+        not args.paper
+        and not args.check_handoff
+        and not args.plan
+        and not args.verify_raw
+        and not args.check_csv
+        and not args.check_html
+    ):
+        parser.error("Provide a manuscript path, --check-handoff, --plan, --verify-raw, --check-csv, and/or --check-html.")
 
+    ban_terms = [t.strip() for t in args.ban_terms.split(",") if t.strip()]
     total_hard_fails = 0
     print("=" * 72)
-    print("MATH MODELING FRONTIER AUDIT & RELAY VALIDATOR (v1.3)")
+    print("MATH MODELING FRONTIER AUDIT & RELAY VALIDATOR (v1.5)")
     print("=" * 72)
 
     # ---- OPTIONAL: O(1) HANDOFF RELAY CHECK ----
@@ -865,15 +1494,45 @@ def main() -> int:
             for msg in r_fails:
                 print(f"  [HARD FAIL]{msg}")
 
+    # ---- OPTIONAL: DELIVERABLE CSV INTEGRITY CHECK ----
+    if args.check_csv:
+        c_fails, c_warns, c_info = check_deliverable_csvs(args.check_csv, strict_csv=args.strict_csv)
+        print("\n[DELIVERABLE CSV AUDIT] (Encoding, Schema, NaN/Inf & Key Uniqueness)")
+        for line in c_info:
+            print(line)
+        for w in c_warns:
+            print(f"  [WARN]{w}")
+        if not c_fails:
+            print("  -> PASS (0 hard CSV failures)")
+        else:
+            total_hard_fails += len(c_fails)
+            for msg in c_fails:
+                print(f"  [HARD FAIL]{msg}")
+
+    # ---- OPTIONAL: OFFLINE HTML DASHBOARD AUDIT ----
+    if args.check_html:
+        h_fails, h_warns, h_info = check_deliverable_html(args.check_html, ban_terms=ban_terms)
+        print("\n[DELIVERABLE HTML DASHBOARD AUDIT] (Self-Contained, Leaks & JS Syntax)")
+        for line in h_info:
+            print(line)
+        for w in h_warns:
+            print(f"  [WARN]{w}")
+        if not h_fails:
+            print("  -> PASS (0 hard HTML failures)")
+        else:
+            total_hard_fails += len(h_fails)
+            for msg in h_fails:
+                print(f"  [HARD FAIL]{msg}")
+
     # ---- MANUSCRIPT AUDIT ----
     if args.paper:
         target = Path(args.paper)
-        files = collect_manuscript_files(target)
+        inferred_root = Path(args.project_root) if args.project_root else (Path(args.plan).resolve().parent if args.plan else None)
+        files = collect_manuscript_files(target, project_root=inferred_root, extra_companions=args.companion)
         if not files:
             print(f"[ERROR] No .tex or .md files found at: {target}")
             return 2
 
-        ban_terms = [t.strip() for t in args.ban_terms.split(",") if t.strip()]
         stage1_patterns = list(INTERNAL_LEAK_PATTERNS) + list(PATH_LEAK_PATTERNS) + list(PLACEHOLDER_PATTERNS)
         for term in ban_terms:
             stage1_patterns.append(("ANONYMITY_BAN", re.escape(term)))
@@ -883,13 +1542,39 @@ def main() -> int:
         src_path = Path(args.src_dir) if args.src_dir else None
         log_path = Path(args.log) if args.log else None
         pdf_path = Path(args.pdf) if args.pdf else None
+        paper_dir = target if target.is_dir() else target.parent
 
         s1_hits = scan_patterns(files, stage1_patterns)
-        ref_fails, fig_warns = check_latex_refs_and_figs(files, figs_path)
-        src_fails = check_src_paths(src_path, ban_terms)
+        prose_fails, prose_warns, prose_info = check_prose_integrity_and_companion_rules(files)
+        ref_fails, fig_warns, fig_info = check_latex_refs_and_figs(files, figs_path)
+        src_fails, src_warns = check_src_paths(src_path, ban_terms, extra_py_dirs=[paper_dir])
         sync_fails = check_metrics_and_table_provenance(target, files, metrics_path)
         log_fails, log_warns = check_latex_log(log_path)
-        pdf_fails, pdf_warns, pdf_info = check_pdf_metadata(pdf_path, ban_terms)
+
+        claim_sources: List[Tuple[str, str]] = [
+            (p.name, p.read_text(encoding="utf-8", errors="replace"))
+            for p in files
+            if "协作记录" not in p.name
+        ]
+        for aux_p in (Path(args.plan) if args.plan else None, Path(args.check_handoff) if args.check_handoff else None):
+            if aux_p and aux_p.is_file():
+                claim_sources.append((aux_p.name, aux_p.read_text(encoding="utf-8", errors="replace")))
+
+        max_pages: Optional[int] = args.max_pages
+        max_pages_source: Optional[str] = "--max-pages" if max_pages is not None else None
+        if max_pages is None and args.plan:
+            extracted = extract_plan_max_pages(Path(args.plan))
+            if extracted is not None:
+                max_pages, phrase = extracted
+                max_pages_source = f"00_plan.md Sec. 0: '{phrase}'"
+
+        pdf_fails, pdf_warns, pdf_info = check_pdf_metadata(
+            pdf_path,
+            ban_terms,
+            claim_sources=claim_sources,
+            max_pages=max_pages,
+            max_pages_source=max_pages_source,
+        )
 
         render_fails: List[str] = []
         rendered_pages: List[Path] = []
@@ -903,11 +1588,13 @@ def main() -> int:
                 if err or not rendered_pages:
                     render_fails.append(f"[RENDER_PDF_FAILED] {err or 'Rendered 0 pages'}")
 
-        all_extra_fails = ref_fails + src_fails + sync_fails + log_fails + pdf_fails + render_fails
-        all_warns = fig_warns + log_warns + pdf_warns
+        all_extra_fails = prose_fails + ref_fails + src_fails + sync_fails + log_fails + pdf_fails + render_fails
+        all_warns = prose_warns + fig_warns + src_warns + log_warns + pdf_warns
         total_hard_fails += len(s1_hits) + len(all_extra_fails)
 
         print(f"\n[STAGE 1] Hard Facts, Anti-Leak, Anonymity, Refs, Code, Sync, Log, PDF & Render ({len(files)} file(s))")
+        for info_ln in prose_info + fig_info:
+            print(info_ln)
         if not s1_hits and not all_extra_fails:
             print("  -> PASS (0 hard failures)")
         else:

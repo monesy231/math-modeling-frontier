@@ -9,7 +9,8 @@ Key journal conventions baked into code (zero prompt bloat):
 - Frameless legends, hairline charcoal spines (#222222), subtle y-only gridlines.
 - Multi-panel bold panel labels (`a, b, c` Nature / `A, B, C` Science).
 - Ready primitives: `create_journal_fig`, `label_panels`, `plot_with_ci`,
-  `plot_tornado`, `plot_diverging_heatmap`, `direct_label`, `add_zoom_inset`.
+  `plot_tornado`, `plot_diverging_heatmap`, `direct_label`, `add_zoom_inset`,
+  `group_close_points`.
 - Dual export (vector .pdf with TrueType fonttype=42 + 300-DPI .png) + layout check.
 """
 from __future__ import annotations
@@ -35,11 +36,11 @@ JOURNAL_WIDTHS = {
     "double": 7.20,   # ~183 mm (Nature/Science full double column)
 }
 
-# Colorblind-safe, perceptually balanced journal palette (NPG / Okabe-Ito inspired)
+# Colorblind-safe, perceptually balanced journal palette for figure data series ONLY (NPG / Okabe-Ito inspired)
 JOURNAL_COLORS: List[str] = [
     "#2B4C7E",  # Deep Academic Navy
     "#D95F02",  # Burnt Vermilion
-    "#009E73",  # Journal Teal
+    "#009E73",  # Journal Teal (for figure curves/bars only — NEVER use green/teal for paper fonts or dashboard UI)
     "#E6AB02",  # Ochre Amber
     "#7570B3",  # Muted Indigo
     "#595959",  # Charcoal Slate
@@ -49,6 +50,22 @@ JOURNAL_LINESTYLES: List[str] = ["-", "--", "-.", ":", "-", "--"]
 JOURNAL_MARKERS: List[str] = ["o", "s", "^", "D", "v", "P"]
 ACADEMIC_LINESTYLES = JOURNAL_LINESTYLES
 ACADEMIC_MARKERS = JOURNAL_MARKERS
+
+# Minimalist academic typography, table & interactive dashboard palette (Charcoal-Ink & Oxford Slate-Navy; zero green tint)
+DOCUMENT_PALETTE = {
+    "heading": "#111827",      # Title, H1/H2, table caption & table header text (Deep Academic Ink)
+    "subhead": "#1E3A5F",      # H3 subheadings & inline code text (Oxford Slate-Navy)
+    "body": "#1A1A1A",         # Primary manuscript body text (Pure Charcoal Ink)
+    "muted": "#475569",        # Subtitles, figure captions, running headers & secondary labels (Cool Slate)
+    "rule": "#1E293B",         # Booktabs top/mid/bottom rules & title dividers (Dark Slate-Navy)
+    "border": "#CBD5E1",       # Running header rule & card/table dividers (Neutral Light Slate)
+    "surface": "#F8FAFC",      # Table alternating row shading & page background (Cool Alabaster)
+    "surface_alt": "#F1F5F9",  # Code block, table header & callout banner background
+    "header_bg": "#0F172A",    # Dashboard top banner background (Deep Oxford Navy)
+    "accent": "#2B4C7E",       # Primary UI accent border / active indicator
+    "accent_text": "#1E40AF",  # Positive delta text & interactive link color
+    "accent_bg": "#EFF6FF",    # Focus table row & positive delta pill background
+}
 
 
 def _pick_available_font(candidates: Sequence[str]) -> Optional[str]:
@@ -397,7 +414,7 @@ def plot_pipeline_diagram(
         )
         ax.add_patch(card)
 
-        # Solid top header bar
+        # Solid top header bar (auto-select dark or white text based on WCAG background luminance)
         hbar = FancyBboxPatch(
             (x0, y_bot + box_height - header_h),
             box_w,
@@ -410,13 +427,17 @@ def plot_pipeline_diagram(
         )
         ax.add_patch(hbar)
 
+        r_c, g_c, b_c = mcolors.to_rgb(color)
+        lum = 0.2126 * r_c + 0.7152 * g_c + 0.0722 * b_c
+        header_text_color = "#1A1A1A" if lum > 0.52 else "white"
+
         ax.text(
             cx,
             y_bot + box_height - header_h / 2.0,
             header,
             ha="center",
             va="center",
-            color="white",
+            color=header_text_color,
             fontsize=8.0,
             fontweight="bold",
             zorder=4,
@@ -502,6 +523,49 @@ def add_zoom_inset(
         spine.set_linewidth(0.65)
     mark_inset(ax, axins, loc1=connect_locs[0], loc2=connect_locs[1], fc="none", ec="#666666", lw=0.65, ls="--")
     return axins
+
+
+def group_close_points(
+    ax: plt.Axes,
+    points: Sequence[Tuple[float, float]],
+    min_dist_pt: float = 12.0,
+) -> List[List[int]]:
+    """
+    Cluster 2D scatter/Pareto points whose markers or labels would touch at final print size.
+    Converts data coordinates to display pixels after drawing layout and runs BFS with
+    threshold `min_dist_pt * dpi / 72`, returning sorted index clusters.
+    """
+    if not points:
+        return []
+    try:
+        ax.figure.canvas.draw()
+    except Exception:
+        pass
+    coords_px = ax.transData.transform(np.asarray(points, dtype=float))
+    thresh_px = float(min_dist_pt) * (float(ax.figure.dpi) / 72.0)
+    n = len(points)
+    visited = [False] * n
+    clusters: List[List[int]] = []
+    for start in range(n):
+        if visited[start]:
+            continue
+        visited[start] = True
+        queue = [start]
+        comp = [start]
+        while queue:
+            cur = queue.pop(0)
+            for nxt in range(n):
+                if visited[nxt]:
+                    continue
+                dx = float(coords_px[cur, 0] - coords_px[nxt, 0])
+                dy = float(coords_px[cur, 1] - coords_px[nxt, 1])
+                if float(np.hypot(dx, dy)) < thresh_px:
+                    visited[nxt] = True
+                    queue.append(nxt)
+                    comp.append(nxt)
+        clusters.append(sorted(comp))
+    clusters.sort(key=lambda c: c[0])
+    return clusters
 
 
 def check_figure_layout(fig: plt.Figure) -> List[str]:
