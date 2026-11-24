@@ -211,11 +211,12 @@ def main() -> int:
 | **Step 5 · W-Draft** | `[W/F]` | Isolated press-conference draft + compiled PDF | `PENDING` | `04_paper/` |
 | **Step 6 · W-Audit** | `[F]` | Independent read-only Stage 1 + Stage 2 audit + seal | `PENDING` | Audit report |
 
-## 2. Coherent `Q1 -> Qn` Math Spine & Baseline Route
+## 2. Coherent `Q1 -> Qn` Math Spine, Cohort Accounting & Baseline Route
 - **Q1**: [Core white-box mechanism & state variables]
 - **Q2**: [Coupled / upgraded formulation inheriting Q1]
 - **Q3**: [Stochastic / sensitivity / policy extension]
-- **Global Baseline Path (Gate P1)**: [Minimal end-to-end `Q1 -> Qn` script chain]
+- **Cohort, Precision & Causality Contract**: [Item cohort vs. entity cohort + fixed denominators; cross-period carryover conservation; exact integer-scaled units if decimals are fixed; causal decision-time estimates vs. post-hoc settlement parameters]
+- **Global Baseline Path (Gate P1)**: [Minimal end-to-end `Q1 -> Qn` script chain + independent raw-input `verify.py`]
 
 ## 3. Actor-Critic Paradigm Trade-Off
 | Paradigm | Core Idea | Fatal Assumption / Data Risk | Verdict |
@@ -236,11 +237,11 @@ def main() -> int:
 ## 5. Experiment Duty Matrix
 | Exp | Duty | Design / Sweep | Metric Pointer (`03_outputs/metrics/`) | Fig / Table |
 | :--- | :--- | :--- | :--- | :--- |
-| E1 | Premise Check | Normality / VIF / Stationarity | `eda_diagnostics.json` | Fig. 1 / Tab. 1 |
-| E2 | Baseline vs. Proposed | Identical split + 95% CI | `model_comparison.json` | Tab. 2 / Fig. 3 |
-| E3 | Ablation / Mechanism | Remove custom module | `ablation.json` | Tab. 2 |
-| E4 | Sensitivity (±5%, ±10%) | Top parameters + stress test | `sensitivity.json` | Fig. 5 / Fig. 6 |
-| E5 | Out-of-Time & Replay Audit | Frozen-prefix chronological split + tamper probes | `chronological.json`, `audit_probes.json` | Tab. 4 / App. |
+| E1 | Premise & Relaxation Bounds | Conservation / VIF / open cross-period bounds | `eda_diagnostics.json` | Fig. 1 / Tab. 1 |
+| E2 | Two-Tier Baseline vs. Proposed | Naive + strong greedy + bootstrap & MC intervals | `model_comparison.json` | Tab. 2 / Fig. 3 |
+| E3 | 1-Flag-1-Mechanism Ablation | Single-factor switches + counterfactual toggle-off | `ablation.json` | Tab. 2 |
+| E4 | Stress (±5%, ±10%) & Frontiers | Parameter/delay shocks + priority/Pareto ranking | `sensitivity.json`, `pareto_sweep.json` | Fig. 4 / Fig. 5 |
+| E5 | Chronological & Tamper Audit | Lock-then-replay + prefix causality + state/tamper probes | `chronological.json`, `audit_probes.json` | Tab. 4 / App. |
 """
 
     log_md = f"""# 01_log.md — Cold Archival Ledger (Append-Only — NEVER Preload Into Normal Turns)
@@ -248,11 +249,10 @@ def main() -> int:
 - **Project**: {args.contest} — {args.title} | **Created**: {now_str}
 
 ## 1. EDA & Statistical Premise Diagnostics
-- **Raw Data (`01_data/raw/`)**: [Filenames, shapes, missing rates]
-- **Premise Tests**: [Normality / VIF / ADF / outlier rule]
+<!-- Append raw file SHA-256 notes, shapes, missingness, and statistical/conservation premise checks below -->
 
 ## 2. External Data & Literature Provenance (Verifiable Real Sources Only)
-- [Source / DOI / URL / retrieval date]
+<!-- Append real DOIs, official URLs, and retrieval timestamps below -->
 
 ## 3. Dynamic Pivots & 3-Attempt Circuit-Breaker Archive (Internal Only — NEVER Narrate in Paper)
 | Timestamp | Sub-Problem | Root Cause | Attempts (#1-#3) | Pivot (`L2`/`L3`) | Positive Paper Framing |

@@ -106,6 +106,19 @@ def format_scalar(val: Any, decimals: int) -> str:
     return escape_latex(str(val))
 
 
+def validate_finite_json(obj: Any, prefix: List[str]) -> None:
+    """Reject NaN/Inf anywhere in a metric JSON file, including inside >6-item arrays."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            validate_finite_json(v, prefix + [str(k)])
+    elif isinstance(obj, list):
+        for idx, item in enumerate(obj):
+            validate_finite_json(item, prefix + [str(idx)])
+    elif isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        loc = ".".join(prefix)
+        raise ValueError(f"Invalid non-finite float at '{loc}': {obj}")
+
+
 def flatten_json(obj: Any, prefix: List[str], decimals: int, out: List[Tuple[str, str, str]]) -> None:
     if isinstance(obj, dict):
         for k, v in obj.items():
@@ -247,7 +260,8 @@ def main() -> int:
     collisions: List[Tuple[str, str, str]] = []
 
     for jf in json_files:
-        data = json.loads(jf.read_text(encoding="utf-8"))
+        data = json.loads(jf.read_text(encoding="utf-8-sig"))
+        validate_finite_json(data, [jf.stem])
         entries: List[Tuple[str, str, str]] = []
         flatten_json(data, [jf.stem], args.decimals, entries)
         for macro, val, src in entries:

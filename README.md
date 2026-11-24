@@ -2,7 +2,7 @@
 
 # `math-modeling-frontier`
 
-**面向新一代旗舰模型的极简双层数模竞赛工程 Skill（v1.5）**
+**面向新一代旗舰模型的极简双层数模竞赛工程 Skill（v1.6）**
 *Zero Cognitive Shackles · Dual-Tier Relay · O(1) Cross-Model Memory · Nature/Science Visuals · Zero-Transcription LaTeX*
 
 [![CI](https://github.com/monesy231/math-modeling-frontier/actions/workflows/ci.yml/badge.svg)](https://github.com/monesy231/math-modeling-frontier/actions/workflows/ci.yml)
@@ -68,21 +68,25 @@
 - 内置 [sync_metrics.py](./.agents/skills/math-modeling-frontier/scripts/sync_metrics.py)：
   - 自动将 `03_outputs/metrics/*.json` 编译为盲审洁净的 `04_paper/generated_metrics.tex` 数值宏（自动拒绝 `NaN/Inf`、**中文字段稳定生成唯一 ASCII 宏名、任何重名碰撞直接报错中止并列出双方原始键名**、自动格式化 95% CI 区间），**半夜改代码重跑后全论文数字一键原子更新**；
   - 自动将 `03_outputs/metrics/*.csv` 编译为右对齐、自动加粗最优值、零竖线的 **Booktabs 标准三线表**（`\input{generated_tables/*.tex}`），同步记录 `_sync_manifest.json` 溯源清单并**自动清理已撤回实验的孤儿旧表**。
-- [audit_paper.py](./.agents/skills/math-modeling-frontier/scripts/audit_paper.py) 内置 **`[STALE_METRICS_TEX]` + `[ORPHAN_GENERATED_TABLE]` + `[MISSING_TABLE_SOURCE]` 三重硬门禁**：改代码忘同步或撤回 CSV 后正文仍引用旧表，终审直接 `FAIL` 拦截。
+- [audit_paper.py](./.agents/skills/math-modeling-frontier/scripts/audit_paper.py) 内置 **`[STALE_METRICS_TEX]` + `[STALE_PDF_VS_METRICS]` + `[STALE_HTML_VS_METRICS]` + `[ORPHAN_GENERATED_TABLE]` + `[MISSING_TABLE_SOURCE]` 多重同源新鲜度硬门禁**：无论是 LaTeX 路线还是 Python/ReportLab/Markdown 报告与离线看板路线，只要改了实验指标忘重编 PDF/看板或撤回 CSV 后正文仍引用旧表，终审直接 `FAIL` 拦截。
 
 ### 5. 大刊科研审美编入代码，1 行 `❌→✅` 精准校准不啰嗦
-- **图表审美靠代码不靠嘴**：[plot_style.py](./.agents/skills/math-modeling-frontier/scripts/plot_style.py) 内置 *Nature / Science / PNAS* 单栏（`3.5 in`）、1.5 栏（`5.0 in`）、双栏（`7.2 in`）物理宽度、色盲/灰度安全低饱和色板 + 线型/标记双冗余、`label_panels()`、`plot_with_ci()`、`plot_tornado()`、`plot_diverging_heatmap()`、`plot_pipeline_diagram()`、`add_zoom_inset()`、`group_close_points()` 及 `.pdf` + 300 DPI `.png` 双导出防遮挡自检；[visual.md](./.agents/skills/math-modeling-frontier/references/visual.md) 仅 **11 行**。
+- **图表审美靠代码不靠嘴**：[plot_style.py](./.agents/skills/math-modeling-frontier/scripts/plot_style.py) 内置 *Nature / Science / PNAS* 单栏（`3.5 in`）、1.5 栏（`5.0 in`）、双栏（`7.2 in`）物理宽度、色盲/灰度安全低饱和色板 + 线型/标记双冗余、`label_panels()`、`plot_with_ci()`、`plot_delta_bars()`（多尺度接近序列有符号差值柱图）、`plot_tornado()`、`plot_diverging_heatmap()`、`plot_pipeline_diagram()`、`add_zoom_inset()`、`group_close_points()` 及 `.pdf` + 300 DPI `.png` 双导出防遮挡自检；[visual.md](./.agents/skills/math-modeling-frontier/references/visual.md) 仅 **11 行**。
 - **反防御与论文排版靠微对照**：写作（Step 5）与审稿（Step 6）**物理会话+文件双隔离**；[writing.md](./.agents/skills/math-modeling-frontier/references/writing.md) 仅 **28 行**，用 1 行 `❌→✅` 精准消灭 D1–D5 防御废话、试错日记、照搬题干和廉价竖线表，局限性统一收口到文末一节。
 
 ### 6. 原始数据防篡改封条 + 交付物 CSV 审计 + 独立两阶段红队终审 + 真 LaTeX 编译 CI 保障
 - **原始数据只读与 SHA-256 防篡改封条（v1.3）**：`00_problem/` 与 `01_data/raw/` 严格只读（所有清洗与派生数据一律写入 `01_data/clean/`）；`init_project.py --lock-raw` 自动生成 `01_data/.raw_checksums.json` 校验封条，`audit_paper.py --verify-raw` 同时做 **SHA-256 逐文件完整性校验**（篡改/删除原文件直接 `FAIL`）与 **`02_src/` 静态写拦截**（拦截任何脚本往 `01_data/raw/` 覆盖写或删文件）。
 - **实战淬炼的交付物 CSV、反例探针与配套文档核验体系（v1.4）**：
-  - 在 Step 2/3/4 引入**独立于求解器的结果核验器**（`verify.py`，要求使用 `zip_longest` 全长比对并拦截静默截断型 `zip()`）、**负向篡改探针**（覆盖硬约束违约、提交文件末尾多行、指标表替换与文件缺失）、**2 元素同属性边界反例与分等级容量帽核查**、**开放可行域松弛上下界自洽**、**单因素（ceteris paribus）消融与反事实关闭净增益**，以及**块自助法 vs. 蒙特卡洛扰动区间溯源**；
-  - `audit_paper.py --check-csv`（及 `--strict-csv`）自动审计提交 CSV（拦截 `UTF-8 BOM`、`NaN/Inf`、错列、完全重复行以及未合并的重复复合主键/拆分决策变量行）；
-  - 自动发现并同源审计根目录官方配套文档（`作品说明单*.md`、`AI协作记录*.md`），硬拦截**未删除的官方模板填写提示**（`[TEMPLATE_INSTRUCTION_LEAK]`）、**超过 60 字的一句话概述**（`[SUMMARY_OVER_60_CHARS]`）、**自相矛盾的同值变化笔误**（如 `"由 2,586 票降至 2,586"`，`[DEGENERATE_CHANGE]`）以及**正文/说明单声称页数与实际编译 PDF 页数不符**（`[PDF_PAGE_COUNT_MISMATCH]`），并对提交前待填报的报名队名/人数发出显式提醒（`[REGISTRATION_PLACEHOLDER]`）。
+  - 在 Step 2/3/4 引入**独立于求解器的原始输入黑盒核验器**（`verify.py`，要求直读原始工作簿/CSV、使用整数刻度守恒与 `zip_longest` 全长比对并拦截静默截断型 `zip()`）、**负向篡改探针**（覆盖硬约束违约、提交文件末尾多行、指标表替换与文件缺失）、**2 元素同属性边界反例与分等级容量帽核查**、**开放可行域松弛上下界自洽**、**单因素（ceteris paribus）消融与反事实关闭净增益**，以及**块自助法 vs. 蒙特卡洛扰动区间溯源**；
+  - `audit_paper.py --check-csv`（及 `--strict-csv`）自动审计提交 CSV（拦截 `UTF-8 BOM`、`NaN/Inf`、错列、完全重复行、未合并的重复复合主键，以及四位小数等固定精度列中的异常位数漂移 `[CSV_INCONSISTENT_DECIMALS]`）；
+  - 自动发现并同源审计根目录官方配套文档（`作品说明单*.md`、`AI协作记录*.md`），硬拦截**未删除的官方模板填写提示**（`[TEMPLATE_INSTRUCTION_LEAK]`）、**待队长汇总/待确认等未收口占位符**（`[PLACEHOLDER]`）、**超过 60 字的一句话概述**（`[SUMMARY_OVER_60_CHARS]`）、**自相矛盾的同值变化笔误**（如 `"由 2,586 票降至 2,586"`，`[DEGENERATE_CHANGE]`）以及**正文/说明单声称页数与实际编译 PDF 页数不符**（`[PDF_PAGE_COUNT_MISMATCH]`），并对提交前待填报的报名队名/人数发出显式提醒（`[REGISTRATION_PLACEHOLDER]`）。
 - **多轮红队终审沉淀的硬页限、可回放证据链与工程便携性门禁（v1.5）**：
-  - `audit_paper.py` 新增 **`--max-pages` / `00_plan.md` Sec. 0 硬页限自动拦截**（`[PDF_OVER_PAGE_LIMIT]`）、**赛中新增官方文件未封存硬拦截**（`--verify-raw` 下 `[RAW_UNSEALED_FILE]` 升级为 `FAIL`）、**正文路径引用附图智能豁免**（识别正文中直接引用的补充图表路径，消除 `[UNUSED_FIG]` 误报）、**`04_paper/*.py` 构建脚本跨平台字体回退告警**（`[SRC_OS_FONT_HARDCODE]`）与 **`--check-html` 离线交互看板审计**（拦截本地路径/内部词泄漏、外链 CDN 依赖及 `node --check` JS 语法报错）；`plot_style.py` 新增 `group_close_points()` 在最终印刷尺寸下聚类拥挤散点；
-  - 在 Step 3–6 固化**双向边界反例与定案状态缓存同步校验**（涵盖触发边界 `± ε` 与末单定案/同伴留存双场景）、**事后参数不变性测试**、**双口径官方指标与严格字典序同表披露**、**前推时序锁参验证（`E5`）**、**可回放结构化诊断证据链**（篡改替换合法策略文案仍必报错）以及**冷启动清缓存逐字节复现**。
+  - `audit_paper.py` 内置 **`--max-pages` / `00_plan.md` Sec. 0 硬页限自动拦截**（`[PDF_OVER_PAGE_LIMIT]`）、**赛中新增官方文件未封存硬拦截**（`--verify-raw` 下 `[RAW_UNSEALED_FILE]` 直接 `FAIL`）、**正文路径引用附图智能豁免**（识别正文中直接引用的补充图表路径，消除 `[UNUSED_FIG]` 误报）、**`04_paper/*.py` 构建脚本跨平台字体回退告警**（`[SRC_OS_FONT_HARDCODE]`）与 **`--check-html` 离线交互看板审计**；`plot_style.py` 内置 `group_close_points()` 在最终印刷尺寸下聚类拥挤散点；
+  - 在 Step 3–6 固化**双向边界反例与跨事件定案状态同步校验**（涵盖触发边界 `± ε` 与末单定案/同伴留存双场景）、**事后参数不变性测试**、**双口径官方指标与严格字典序同表披露**、**前推时序锁参验证（`E5`）**、**可回放结构化诊断证据链**（篡改替换合法策略文案或受保护票号仍必报错）以及**冷启动清缓存逐字节复现**。
+- **六轮旗舰终审闭环：PDF 公式零源码残余、同刻不动点重检与跨产物对账门禁（v1.6）**：
+  - **PDF 全集数学符号与去壳顺序双重防护**：针对脚本式 PDF 构建器（如 ReportLab `build_report.py`）先剥离 `\mathcal{I}` 再替换 `\in` 导致 `\inI` 漏网的隐蔽缺陷，`audit_paper.py` 全面升级 PDF 文本提取扫描器（`[PDF_UNRENDERED_LATEX]` 覆盖全部 LaTeX 关系/集合/希腊字母/上下标与 `\inI` 连写残余），静态扫描 `04_paper/*.py` 提醒“先替换符号再去壳 + 零反斜杠构建期断言”（`[SRC_INLINE_MATH_UNSAFE]`），并新增 Markdown 行内 `$` / `$$` 配对校验（`[MD_UNBALANCED_MATH]`）；
+  - **同刻单事件不动点重检（Intra-Event Fixed-Point Re-Pass）**：在 Step 4（`Gate R`）与 Step 6（`audit.md`）明确要求除跨事件状态清理外，必须用“同刻异构优先级双实体同时开窗”探针检验单事件循环——当后序高优实体同刻结清共享触发状态时，前序暂缓实体必须重检，杜绝单遍遍历顺序依赖残留；
+  - **跨产物同源锁与 HTML JSON 载荷深检**：要求报告构建器与看板在加载期做跨文件 `submission_policy` 与核心标量对账断言；`audit_paper.py` 新增 PDF/HTML 相对 `metrics/` 的新鲜度硬拦截、`--check-html` 对 `<script type="application/json">` 内嵌数据的严格有限值解析（拦截会令浏览器 `JSON.parse()` 崩溃的 `NaN`/`Infinity` 或 `@@DATA@@` 残留，`[HTML_INVALID_JSON_PAYLOAD]`）、`sync_metrics.py` 全深度数组 `NaN/Inf` 拦截，以及 `handoff.md` 对 `MM Step N` 与根目录伴随文档指针的完整校验。
 - Step 6 强制另开独立只读旗舰会话（**建议换用不同于写作模型的另一款旗舰模型交叉审稿**），先运行 [audit_paper.py](./.agents/skills/math-modeling-frontier/scripts/audit_paper.py)：
   - **Stage 1 硬门禁（缺件或渲染失败一律 `FAIL`，绝不静默返回 0）**：按 6 项必填字段逐项核验 `00_plan.md` 赛规与来源、内部工程词与模板提示零泄漏、正文/代码（`02_src/`）/PDF 元数据零匿名与路径泄漏、PDF 提取文本零缺字乱码（`\ufffd`）与未渲染 LaTeX 源码残留、自称页数与 PDF 实际页数一致、`\ref` 无断链、无过期宏与孤儿表、指定的 `.pdf`/`.log`/目录必须真实存在且 `--render-pdf` 必须成功将 PDF **逐页转成 PNG**（自动注入 `.gitignore` 防止预览图污染仓库）供多模态旗舰“肉眼”审查每一页版面。
   - **Stage 2 章节感知信号 + 最小手术精修**：自动识别 LaTeX/Markdown 章节标题与代码环境——**在文末 *Strengths, Weaknesses / Limitations / AI Report* 章节和代码附录中自动豁免 `D2/D5` 误报**，只在摘要/引言/建模/结果/结论里严抓防御性废话与 AI 腔，仅输出 `位置 | 类别 | 原句 | 建议替换` 手术表。
@@ -117,9 +121,9 @@
 │   │   └── audit.md                                     # [29行] 仅 Step 6 加载：独立两阶段红队终审
 │   └── scripts/
 │       ├── init_project.py                              # 一键建目录、O(1) 三层记忆（≤80行）、raw 封条与 plot_style.py
-│       ├── plot_style.py                                # Nature/Science/PNAS 矢量绘图、group_close_points() 与组图原语库
-│       ├── sync_metrics.py                              # JSON/CSV → LaTeX 数值宏与 Booktabs 三线表零手抄同步
-│       └── audit_paper.py                               # Stage 1/2 终审 + 硬页限/赛制/handoff/CSV/HTML/字体/附图/PDF 转 PNG
+│       ├── plot_style.py                                # Nature/Science/PNAS 矢量绘图、plot_delta_bars() 与散点聚类原语库
+│       ├── sync_metrics.py                              # JSON/CSV → LaTeX 数值宏与 Booktabs 三线表零手抄同步（全深度禁 NaN）
+│       └── audit_paper.py                               # Stage 1/2 终审 + 页限/公式残余/新鲜度/handoff/CSV/HTML/PDF 转 PNG
 ├── LICENSE
 └── README.md
 ```

@@ -9,8 +9,8 @@ Key journal conventions baked into code (zero prompt bloat):
 - Frameless legends, hairline charcoal spines (#222222), subtle y-only gridlines.
 - Multi-panel bold panel labels (`a, b, c` Nature / `A, B, C` Science).
 - Ready primitives: `create_journal_fig`, `label_panels`, `plot_with_ci`,
-  `plot_tornado`, `plot_diverging_heatmap`, `direct_label`, `add_zoom_inset`,
-  `group_close_points`.
+  `plot_delta_bars`, `plot_tornado`, `plot_diverging_heatmap`, `direct_label`,
+  `add_zoom_inset`, `group_close_points`.
 - Dual export (vector .pdf with TrueType fonttype=42 + 300-DPI .png) + layout check.
 """
 from __future__ import annotations
@@ -90,8 +90,12 @@ def apply_academic_style(lang: str = "en", scale: float = 1.0) -> None:
             "SimHei",
             "PingFang SC",
             "Noto Sans CJK SC",
+            "Noto Sans SC",
+            "Source Han Sans SC",
             "WenQuanYi Zen Hei",
+            "STHeiti",
             "Songti SC",
+            "Arial Unicode MS",
         ])
         font_family = [zh_font, "DejaVu Sans"] if zh_font else ["DejaVu Sans"]
     else:
@@ -279,6 +283,59 @@ def plot_with_ci(
     )
     ax.fill_between(x, lower, upper, color=color, alpha=ci_alpha, linewidth=0, label=ci_label)
     return ax
+
+
+def plot_delta_bars(
+    ax: plt.Axes,
+    labels: Sequence[Union[str, int, float]],
+    deltas: Sequence[float],
+    ylabel: str = "Delta (Proposed - Baseline)",
+    xlabel: str = "",
+    title: Optional[str] = None,
+    fmt: str = "+.2f",
+    width: float = 0.54,
+    pos_color: Optional[str] = None,
+    neg_color: Optional[str] = None,
+    annotate: bool = True,
+) -> plt.Axes:
+    """
+    Plot signed difference bars (`proposed - baseline`) across scales or regimes.
+    Preserves small signed gains/trade-offs that near-identical absolute bars obscure,
+    with automatic y-axis headroom so direct bar-tip numbers never clip spines.
+    """
+    vals = np.asarray(deltas, dtype=float)
+    x_pos = np.arange(len(labels))
+    c_pos = pos_color or JOURNAL_COLORS[0]
+    c_neg = neg_color or JOURNAL_COLORS[1]
+    bar_colors = [c_pos if v >= 0 else c_neg for v in vals]
+
+    ax.axhline(0.0, color="#64748B", linewidth=0.7, zorder=2)
+    ax.bar(x_pos, vals, width=width, color=bar_colors, alpha=0.90, zorder=3)
+
+    ymin = float(min(0.0, float(np.nanmin(vals)) if len(vals) else 0.0))
+    ymax = float(max(0.0, float(np.nanmax(vals)) if len(vals) else 0.0))
+    span = (ymax - ymin) if (ymax - ymin) > 1e-12 else 1.0
+
+    if annotate:
+        offset = 0.035 * span
+        for idx, val in enumerate(vals):
+            if np.isnan(val):
+                continue
+            y_txt = float(val) + (offset if val >= 0 else -offset)
+            ax.text(
+                idx,
+                y_txt,
+                format(float(val), fmt),
+                ha="center",
+                va="bottom" if val >= 0 else "top",
+                fontsize=7.0,
+                color="#1F1F1F",
+            )
+
+    ax.set_ylim(ymin - 0.22 * span, ymax + 0.24 * span)
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels([str(lbl) for lbl in labels])
+    return style_axis(ax, xlabel=xlabel, ylabel=ylabel, title=title, legend=False, grid_axis="y")
 
 
 def plot_tornado(

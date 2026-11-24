@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 Deterministic Stage 1 (Hard Compliance), Section-Aware Stage 2 (Defensive /
-AI-Slop / Cheap-Table Signals), PDF Page Renderer (for multimodal page-by-page
-inspection), Field-by-Field 00_plan.md Live-Rule & Page-Limit Gate, Orphan-Table
-Provenance Guard, Offline HTML Dashboard Auditor, and O(1) `handoff.md` Relay
-Validator (v1.5).
+AI-Slop / Cheap-Table Signals), PDF Page Renderer & Full Math-Token Scanner,
+Field-by-Field 00_plan.md Live-Rule & Page-Limit Gate, Cross-Artifact Freshness
+& Orphan-Table Guard, Deliverable CSV/HTML Payload Auditor, and O(1) `handoff.md`
+Relay Validator (v1.6).
 
 Exit code:
   0 = Stage 1 / Handoff / Plan checks PASS
@@ -58,8 +58,8 @@ PATH_LEAK_PATTERNS: List[Tuple[str, str]] = [
 # Stage 1 HARD FAIL: Unfinished placeholders & unremoved official template prompts
 PLACEHOLDER_PATTERNS: List[Tuple[str, str]] = [
     ("PLACEHOLDER", r"\b(?:TODO|TBD|FIXME|XXX)\b"),
-    ("PLACEHOLDER", r"\[待核验\]"),
-    ("PLACEHOLDER", r"\[待补充\]"),
+    ("PLACEHOLDER", r"\[(?:待核验|待补充|待汇总|待确认|待填写|待更新|待定)\]"),
+    ("PLACEHOLDER", r"(?:待(?:队长|队员|团队|人工)(?:汇总|确认|核实|补充|填写)|仍待(?:队长|队员|团队)?汇总)"),
     ("PLACEHOLDER", r"\[\?\?\]"),
     ("TEMPLATE_INSTRUCTION_LEAK", r"引用块（以\s*`?>`?\s*开头）是填写提示"),
     ("TEMPLATE_INSTRUCTION_LEAK", r"定稿时请删除"),
@@ -172,6 +172,95 @@ def collect_manuscript_files(
     return files
 
 
+def _check_markdown_inline_math_balance(path: Path, text: str) -> List[str]:
+    """
+    Detect unbalanced inline '$' math delimiters in Markdown files while ignoring
+    fenced code blocks, standalone/inline '$$...$$' display math, HTML comments,
+    inline backtick code spans, and escaped '\\$'.
+    """
+    if path.suffix.lower() != ".md":
+        return []
+
+    fails: List[str] = []
+    lines = text.splitlines()
+    in_fence = False
+    in_display_math = False
+    in_html_comment = False
+
+    para_lines: List[str] = []
+    para_start = 1
+
+    def check_block(raw_block: str, start_line: int) -> None:
+        cleaned = re.sub(r"<!--.*?-->", "", raw_block, flags=re.DOTALL)
+        cleaned = re.sub(r"``[^`]+``", "", cleaned)
+        cleaned = re.sub(r"`[^`\n]*`", "", cleaned)
+        cleaned = re.sub(r"\$\$[^$]+\$\$", "", cleaned)
+        cleaned = cleaned.replace(r"\$", "")
+        if cleaned.count("$") % 2 != 0:
+            snippet = " ".join(raw_block.strip().split())
+            if len(snippet) > 110:
+                snippet = snippet[:107] + "..."
+            fails.append(
+                f"[MD_UNBALANCED_MATH] {path.name}:{start_line} has unbalanced inline '$' math delimiter | {snippet}"
+            )
+
+    def flush_para() -> None:
+        nonlocal para_lines
+        if para_lines:
+            check_block("\n".join(para_lines), para_start)
+            para_lines = []
+
+    standalone_block_rx = re.compile(r"^(?:#{1,6}\s+|\|.*|\s*[-*+]\s+|\s*\d+\.\s+|\s*>\s*)")
+
+    for lineno, line in enumerate(lines, start=1):
+        stripped = line.strip()
+
+        if in_html_comment:
+            if "-->" in stripped:
+                in_html_comment = False
+            continue
+        if stripped.startswith("<!--") and "-->" not in stripped:
+            flush_para()
+            in_html_comment = True
+            continue
+
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            flush_para()
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+
+        if stripped == "$$":
+            flush_para()
+            in_display_math = not in_display_math
+            continue
+        if in_display_math:
+            continue
+
+        if stripped.startswith("$$") and stripped.endswith("$$") and len(stripped) >= 4:
+            flush_para()
+            continue
+
+        if not stripped or stripped in ("---", "***", "___"):
+            flush_para()
+            continue
+
+        if standalone_block_rx.match(line):
+            flush_para()
+            check_block(line, lineno)
+            continue
+
+        if not para_lines:
+            para_start = lineno
+        para_lines.append(line)
+
+    flush_para()
+    if in_display_math:
+        fails.append(f"[MD_UNBALANCED_MATH] {path.name}:EOF has unclosed '$$' display math block")
+    return fails
+
+
 def check_prose_integrity_and_companion_rules(
     files: List[Path],
 ) -> Tuple[List[str], List[str], List[str]]:
@@ -179,8 +268,9 @@ def check_prose_integrity_and_companion_rules(
     Check manuscript and companion deliverables for:
     1. [DEGENERATE_CHANGE] Self-contradictory '由 X 降至 X' / '从 X 升至 X' / 'increased/decreased from X to X'
        where start and end numbers are identical and units do not change.
-    2. [SUMMARY_OVER_60_CHARS] Official '## 02 一句话概述' section exceeding the 60-character limit.
-    3. [REGISTRATION_PLACEHOLDER] Pre-submission team name / member count reminders in 作品说明单.
+    2. [MD_UNBALANCED_MATH] Unclosed inline '$' or '$$' math delimiters in Markdown files.
+    3. [SUMMARY_OVER_60_CHARS] Official '## 02 一句话概述' section exceeding the 60-character limit.
+    4. [REGISTRATION_PLACEHOLDER] Pre-submission team name / member count reminders in 作品说明单.
     """
     hard_fails: List[str] = []
     warnings: List[str] = []
@@ -206,6 +296,7 @@ def check_prose_integrity_and_companion_rules(
 
     for path in files:
         text = path.read_text(encoding="utf-8", errors="replace")
+        hard_fails.extend(_check_markdown_inline_math_balance(path, text))
         lines = text.splitlines()
 
         for lineno, line in enumerate(lines, start=1):
@@ -499,7 +590,10 @@ def validate_handoff(
         if required.lower() not in joined.lower():
             fails.append(f"[HANDOFF_FIELD] Missing required header '{required}' in {handoff_path.name}")
 
-    ptr_rx = re.compile(r"`((?:00_problem|01_data|02_src|03_outputs|04_paper)/[^`\s*<>]+|(?:00_plan|01_log)\.md)`")
+    ptr_rx = re.compile(
+        r"`((?:00_problem|01_data|02_src|03_outputs|04_paper)/[^`\s*<>]+|"
+        r"(?:00_plan|01_log|README)\.md|requirements\.txt|(?:作品说明单|AI协作记录)[^`\s*<>]*\.md)`"
+    )
     checked: Set[str] = set()
     for m in ptr_rx.finditer(joined):
         rel = m.group(1).strip()
@@ -510,7 +604,7 @@ def validate_handoff(
             fails.append(f"[HANDOFF_BROKEN_PTR] Referenced path does not exist: '{rel}' (under {root})")
     info.append(f"  - Verified {len(checked)} project pointer(s) under {root}")
 
-    m_step = re.search(r"Current Step\*{0,2}:\s*`?Step\s*([2-6])", joined, re.IGNORECASE)
+    m_step = re.search(r"Current Step\*{0,2}\s*[:：]\s*`?(?:MM\s+)?Step\s*([2-6])", joined, re.IGNORECASE)
     plan_file = root / "00_plan.md"
     if m_step:
         p_fails, p_info = check_plan_live_rules(plan_file)
@@ -782,9 +876,29 @@ def check_pdf_metadata(
             hard_fails.append(f"[PDF_META_PATH] PDF metadata {k} leaks local path: '{v}'")
 
     # Scan extracted PDF page text for tofu replacement glyphs (\ufffd) and unrendered LaTeX macros
+    # Note: (?![a-z]) intentionally catches merged wrapper tokens such as '\inI' (from '\in\mathcal{I}')
+    # while ignoring lowercase path segments such as '\inputs' or '\init'.
     unrendered_latex_rx = re.compile(
-        r"\\(?:frac\s*\{|sum\s*[_^]|prod\s*[_^]|int\s*[_^]|mathbf\s*\{|mathrm\s*\{|mathbb\s*\{|mathcal\s*\{|"
-        r"left\s*[\(\[\{\|]|right\s*[\)\]\}\|]|toprule\b|midrule\b|bottomrule\b|begin\s*\{(?:equation|align|tabular|array))"
+        r"\\(?:frac|dfrac|tfrac|binom|sqrt|sum|prod|int|oint|iint|"
+        r"mathbf|mathrm|mathbb|mathcal|mathscr|mathfrak|mathsf|mathtt|"
+        r"textbf|textit|textrm|text|mbox|left|right|big|Big|bigg|Bigg|"
+        r"toprule|midrule|bottomrule|cmidrule|multicolumn|multirow|"
+        r"begin\s*\{|end\s*\{|includegraphics|label\s*\{|eqref\s*\{|autoref\s*\{|cref\s*\{|Cref\s*\{|"
+        r"notin|subseteq|supseteq|subset|supset|cup|cap|setminus|emptyset|varnothing|"
+        r"forall|exists|nexists|implies|impliedby|iff|mapsto|"
+        r"rightarrow|leftarrow|leftrightarrow|Rightarrow|Leftarrow|Leftrightarrow|"
+        r"leq|geq|neq|approx|equiv|cong|sim|simeq|propto|asymp|prec|succ|preceq|succeq|"
+        r"times|cdot|cdots|ldots|dots|vdots|ddots|div|circ|oplus|otimes|odot|wedge|vee|neg|"
+        r"infty|partial|nabla|ell|hbar|"
+        r"hat\s*\{|check\s*\{|tilde\s*\{|bar\s*\{|vec\s*\{|dot\s*\{|ddot\s*\{|"
+        r"widetilde|widehat|overline|underline|overbrace|underbrace|"
+        r"lfloor|rfloor|lceil|rceil|langle|rangle|bmod|pmod|"
+        r"alpha|beta|gamma|delta|varepsilon|epsilon|zeta|eta|theta|vartheta|iota|kappa|"
+        r"lambda|mu|nu|xi|pi|varpi|rho|varrho|sigma|varsigma|tau|upsilon|varphi|phi|chi|psi|omega|"
+        r"Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Upsilon|Phi|Psi|Omega|"
+        r"in|le|ge|ne|to|pm|mp|ll|gg)(?![a-z])"
+        r"|[∑∏∫]\s*[_^]\{[^}\n]{1,30}\}"
+        r"|[A-Za-z0-9\)\]]\^\{[^}\n]{1,30}\}"
     )
     for pno, ptext in page_texts:
         if "\ufffd" in ptext:
@@ -973,6 +1087,20 @@ def check_src_paths(
             warns.append(
                 f"[SRC_OS_FONT_HARDCODE] {path.name} references an OS-specific font directory without an apparent cross-platform fallback check"
             )
+        if (
+            path.suffix.lower() == ".py"
+            and re.search(r're\.sub\s*\(\s*r?[\'"]\\\$\(\[\^\$\]\+\)\\\$', text)
+            and re.search(r"\\\\mathcal", text)
+        ):
+            has_bs_assert = bool(re.search(r"""(?:['"]\\\\['"]\s+in\b|r['"]\\['"]\s+in\b)""", text))
+            m_cal = re.search(r"\\\\(?:mathcal|mathrm|mathbf|mathbb)\\\{\(", text)
+            m_in = re.search(r"\\\\in(?:\(\?!|\\b)", text)
+            cal_before_in = bool(m_cal and m_in and m_cal.start() < m_in.start())
+            if cal_before_in or not has_bs_assert:
+                warns.append(
+                    f"[SRC_INLINE_MATH_UNSAFE] {path.name} converts inline '$...$' math via regex without wrapper-last ordering "
+                    f"and/or residual-backslash assertion ('\"\\\\\" in expr'); tokens like '\\in\\mathcal{{I}}' can leak as '\\inI'"
+                )
         for lineno, line in enumerate(text.splitlines(), start=1):
             if line.lstrip().startswith("#"):
                 continue
@@ -995,39 +1123,86 @@ def check_src_paths(
 
 
 def check_metrics_and_table_provenance(
-    target: Path,
+    target: Optional[Path],
     files: List[Path],
     metrics_dir: Optional[Path],
+    pdf_path: Optional[Path] = None,
+    html_targets: Optional[List[str]] = None,
 ) -> List[str]:
     """
     Verify:
     1. metrics_dir exists if specified.
     2. generated_metrics.tex and generated_tables/*.tex are not older than source JSON/CSV.
-    3. No orphan generated_tables/*.tex exists without a live source CSV.
-    4. Every manuscript \\input{...generated_tables/<stem>...} has BOTH a live source CSV and .tex file.
-    5. _sync_manifest.json (if present) has no deleted source JSON/CSV lingering unsynced.
+    3. Compiled PDF and HTML dashboards are not older than source JSON/CSV or generated_metrics.tex (>5s tolerance).
+    4. No orphan generated_tables/*.tex exists without a live source CSV.
+    5. Every manuscript \\input{...generated_tables/<stem>...} has BOTH a live source CSV and .tex file.
+    6. _sync_manifest.json (if present) has no deleted source JSON/CSV lingering unsynced.
     """
     if metrics_dir is None:
         return []
     if not metrics_dir.is_dir():
         return [f"[ARTIFACT_DIR_MISSING] Metrics directory not found: {metrics_dir}"]
 
-    paper_dir = target if target.is_dir() else target.parent
+    paper_dir = (target if target.is_dir() else target.parent) if target is not None else None
     fails: List[str] = []
 
     live_jsons = [p for p in metrics_dir.glob("*.json") if not p.name.startswith("_")]
     live_csvs = [p for p in metrics_dir.glob("*.csv") if not p.name.startswith("_")]
+    live_all = live_jsons + live_csvs
     live_csv_stems = {p.stem for p in live_csvs}
     live_json_names = {p.name for p in live_jsons}
 
-    # Freshness: JSON -> generated_metrics.tex
+    newest_metric: Optional[Path] = max(live_all, key=lambda p: p.stat().st_mtime) if live_all else None
+
+    if newest_metric is not None:
+        if pdf_path is not None and pdf_path.is_file():
+            if newest_metric.stat().st_mtime > pdf_path.stat().st_mtime + 5.0:
+                fails.append(
+                    f"[STALE_PDF_VS_METRICS] Compiled PDF '{pdf_path.name}' is older than metric file '{newest_metric.name}'. "
+                    f"Rebuild PDF so manuscript numbers match latest metrics!"
+                )
+        for raw_ht in html_targets or []:
+            for part in raw_ht.split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                hp = Path(part)
+                h_candidates = (
+                    [hp]
+                    if hp.is_file()
+                    else (
+                        sorted(
+                            f for f in hp.rglob("*")
+                            if f.is_file() and f.suffix.lower() in {".html", ".htm"} and not f.name.startswith("_")
+                        )
+                        if hp.is_dir()
+                        else []
+                    )
+                )
+                for hfile in h_candidates:
+                    if newest_metric.stat().st_mtime > hfile.stat().st_mtime + 5.0:
+                        fails.append(
+                            f"[STALE_HTML_VS_METRICS] HTML dashboard '{hfile.name}' is older than metric file '{newest_metric.name}'. "
+                            f"Rebuild dashboard so interactive numbers match latest metrics!"
+                        )
+
+    if paper_dir is None:
+        return fails
+
+    # Freshness: JSON -> generated_metrics.tex -> compiled PDF
     gen_metrics = paper_dir / "generated_metrics.tex"
-    if gen_metrics.is_file() and live_jsons:
-        newest_json = max(live_jsons, key=lambda p: p.stat().st_mtime)
-        if newest_json.stat().st_mtime > gen_metrics.stat().st_mtime + 1.0:
-            fails.append(
-                f"[STALE_METRICS_TEX] '{gen_metrics.name}' is older than '{newest_json.name}'. Re-run sync_metrics.py!"
-            )
+    if gen_metrics.is_file():
+        if live_jsons:
+            newest_json = max(live_jsons, key=lambda p: p.stat().st_mtime)
+            if newest_json.stat().st_mtime > gen_metrics.stat().st_mtime + 1.0:
+                fails.append(
+                    f"[STALE_METRICS_TEX] '{gen_metrics.name}' is older than '{newest_json.name}'. Re-run sync_metrics.py!"
+                )
+        if pdf_path is not None and pdf_path.is_file():
+            if gen_metrics.stat().st_mtime > pdf_path.stat().st_mtime + 5.0:
+                fails.append(
+                    f"[STALE_PDF_VS_TEX] Compiled PDF '{pdf_path.name}' is older than '{gen_metrics.name}'. Re-compile PDF!"
+                )
 
     # Freshness + orphan detection: CSV <-> generated_tables/*.tex
     tables_dir = paper_dir / "generated_tables"
@@ -1236,6 +1411,30 @@ def check_deliverable_csvs(
                     else:
                         warnings.append(dup_msg)
 
+            # Check uniform decimal places in fixed-precision decimal-float columns (e.g. 4-decimal quantities)
+            if len(valid_rows) >= 10:
+                for c_idx in float_cols:
+                    all_vals = [r[c_idx].strip() for r in valid_rows if r[c_idx].strip()]
+                    if not all_vals or not all(decimal_float_rx.match(v) for v in all_vals):
+                        continue
+                    prec_counts = Counter(len(v.split(".", 1)[1]) for v in all_vals)
+                    if len(prec_counts) > 1:
+                        dom_prec, dom_cnt = prec_counts.most_common(1)[0]
+                        if dom_cnt >= 0.9 * len(all_vals):
+                            bad_row_idx, bad_val = next(
+                                (idx + 2, r[c_idx].strip())
+                                for idx, r in enumerate(valid_rows)
+                                if r[c_idx].strip() and len(r[c_idx].strip().split(".", 1)[1]) != dom_prec
+                            )
+                            dec_msg = (
+                                f"[CSV_INCONSISTENT_DECIMALS] {csv_path.name}:{bad_row_idx} col '{header[c_idx]}' has value "
+                                f"'{bad_val}' ({len(bad_val.split('.', 1)[1])} decimals) while {dom_cnt}/{len(all_vals)} rows use {dom_prec} decimals"
+                            )
+                            if strict_csv:
+                                hard_fails.append(dec_msg)
+                            else:
+                                warnings.append(dec_msg)
+
         info_lines.append(
             f"  - {csv_path.name}: {len(data_rows)} row(s), {ncols} col(s), encoding={'UTF-8-BOM' if has_bom else 'UTF-8'}"
         )
@@ -1295,7 +1494,11 @@ def check_deliverable_html(
     src_attr_rx = re.compile(r"\bsrc\s*=", re.IGNORECASE)
     type_attr_rx = re.compile(r"\btype\s*=\s*['\"]?([^'\"\s>]+)", re.IGNORECASE)
     js_types = {"", "text/javascript", "application/javascript", "module"}
+    json_types = {"application/json", "application/ld+json"}
     node_exe = shutil.which("node")
+
+    def _reject_nonfinite_json(token: str) -> None:
+        raise ValueError(f"Non-standard JSON constant '{token}' (breaks browser JSON.parse)")
 
     for html_path in html_files:
         text = html_path.read_text(encoding="utf-8", errors="replace")
@@ -1303,6 +1506,11 @@ def check_deliverable_html(
         if not text.strip() or ("<html" not in lower and "<body" not in lower and "<script" not in lower):
             hard_fails.append(f"[HTML_EMPTY] {html_path.name} is empty or missing basic HTML markup")
             continue
+
+        if "\ufffd" in text:
+            hard_fails.append(f"[HTML_TOFU_GLYPH] {html_path.name} contains replacement character '\\ufffd'")
+        if "@@DATA@@" in text:
+            hard_fails.append(f"[HTML_UNREPLACED_TOKEN] {html_path.name} contains unreplaced template token '@@DATA@@'")
 
         for lineno, line in enumerate(text.splitlines(), start=1):
             for code, rx in compiled_leaks:
@@ -1322,6 +1530,7 @@ def check_deliverable_html(
                     )
 
         js_blocks: List[str] = []
+        json_block_count = 0
         for m_sc in script_block_rx.finditer(text):
             attrs, body = m_sc.group(1) or "", m_sc.group(2) or ""
             if src_attr_rx.search(attrs):
@@ -1330,6 +1539,17 @@ def check_deliverable_html(
             sc_type = m_type.group(1).strip().lower() if m_type else ""
             if sc_type in js_types and body.strip():
                 js_blocks.append(body)
+            elif sc_type in json_types:
+                json_block_count += 1
+                if not body.strip():
+                    hard_fails.append(f"[HTML_INVALID_JSON_PAYLOAD] {html_path.name} has empty <script type='{sc_type}'> block")
+                else:
+                    try:
+                        json.loads(body, parse_constant=_reject_nonfinite_json)
+                    except Exception as exc:
+                        hard_fails.append(
+                            f"[HTML_INVALID_JSON_PAYLOAD] {html_path.name} <script type='{sc_type}'> invalid JSON: {str(exc)[:140]}"
+                        )
 
         js_status = "no inline JS"
         if js_blocks:
@@ -1439,7 +1659,7 @@ def main() -> int:
     ban_terms = [t.strip() for t in args.ban_terms.split(",") if t.strip()]
     total_hard_fails = 0
     print("=" * 72)
-    print("MATH MODELING FRONTIER AUDIT & RELAY VALIDATOR (v1.5)")
+    print("MATH MODELING FRONTIER AUDIT & RELAY VALIDATOR (v1.6)")
     print("=" * 72)
 
     # ---- OPTIONAL: O(1) HANDOFF RELAY CHECK ----
@@ -1512,7 +1732,17 @@ def main() -> int:
     # ---- OPTIONAL: OFFLINE HTML DASHBOARD AUDIT ----
     if args.check_html:
         h_fails, h_warns, h_info = check_deliverable_html(args.check_html, ban_terms=ban_terms)
-        print("\n[DELIVERABLE HTML DASHBOARD AUDIT] (Self-Contained, Leaks & JS Syntax)")
+        if not args.paper and args.metrics_dir:
+            h_fails.extend(
+                check_metrics_and_table_provenance(
+                    None,
+                    [],
+                    Path(args.metrics_dir),
+                    pdf_path=None,
+                    html_targets=args.check_html,
+                )
+            )
+        print("\n[DELIVERABLE HTML DASHBOARD AUDIT] (Self-Contained, Leaks, JSON Payload & JS Syntax)")
         for line in h_info:
             print(line)
         for w in h_warns:
@@ -1548,7 +1778,13 @@ def main() -> int:
         prose_fails, prose_warns, prose_info = check_prose_integrity_and_companion_rules(files)
         ref_fails, fig_warns, fig_info = check_latex_refs_and_figs(files, figs_path)
         src_fails, src_warns = check_src_paths(src_path, ban_terms, extra_py_dirs=[paper_dir])
-        sync_fails = check_metrics_and_table_provenance(target, files, metrics_path)
+        sync_fails = check_metrics_and_table_provenance(
+            target,
+            files,
+            metrics_path,
+            pdf_path=pdf_path,
+            html_targets=args.check_html,
+        )
         log_fails, log_warns = check_latex_log(log_path)
 
         claim_sources: List[Tuple[str, str]] = [

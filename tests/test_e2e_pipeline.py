@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-End-to-end test suite for math-modeling-frontier v1.5 scripts:
+End-to-end test suite for math-modeling-frontier v1.6 scripts:
   - init_project.py (O(1) workspace + SHA-256 raw seal)
-  - plot_style.py (headless Agg backend + group_close_points)
-  - sync_metrics.py (Chinese/Unicode unique macros, collision abort, orphan pruning, manifest)
+  - plot_style.py (headless Agg backend + group_close_points + plot_delta_bars)
+  - sync_metrics.py (Chinese/Unicode unique macros, collision abort, deep-array NaN guard, BOM tolerance, orphan pruning, manifest)
   - audit_paper.py (missing-artifact hard fail, failed PDF render hard fail,
-    field-by-field 00_plan.md Sec. 0 rule & page-limit gate, cited supplementary figures,
-    cross-platform font guard, offline HTML dashboard check, deliverable CSV audit,
-    raw-data seal, orphan table guard, section-aware Stage 2)
+    field-by-field 00_plan.md Sec. 0 rule & page-limit gate, full math-token PDF scan
+    including merged '\\inI', Markdown '$' balance, PDF/HTML vs metrics freshness gate,
+    HTML JSON payload validation, cited supplementary figures, cross-platform font &
+    inline-math builder guards, deliverable CSV decimal consistency, raw-data seal,
+    orphan table guard, section-aware Stage 2)
   - Real pdflatex compilation E2E submission test (enforced in CI via REQUIRE_LATEX_E2E=1)
 
 Run:
@@ -149,6 +151,12 @@ class TestMathModelingFrontierPipeline(unittest.TestCase):
         self.assertEqual(clusters, [[0, 1], [2]])
         ps.plt.close(fig3)
 
+        fig4, ax4 = ps.create_journal_fig(1, 1, width="single", height=2.2)
+        ps.plot_delta_bars(ax4, ["5d", "10d", "20d", "40d"], [1.02, 0.81, 0.86, -0.15], ylabel="Gain (pp)")
+        pdf4, png4 = ps.save_fig(fig4, "delta_bars_test", out_dir=str(out_dir))
+        self.assertTrue(pdf4.is_file() and pdf4.stat().st_size > 1000)
+        self.assertTrue(png4.is_file() and png4.stat().st_size > 1000)
+
     def test_03_sync_metrics_chinese_keys_collision_abort_and_nan(self) -> None:
         run_py(INIT_SCRIPT, str(self.root))
         metrics_dir = self.root / "03_outputs" / "metrics"
@@ -210,10 +218,20 @@ class TestMathModelingFrontierPipeline(unittest.TestCase):
         self.assertIn("collide.foo-bar", res_col.stdout)
         (metrics_dir / "collide.json").unlink()
 
-        # NaN must abort with non-zero exit code
+        # NaN must abort with non-zero exit code (both scalar and deep >6-item array)
         (metrics_dir / "bad_nan.json").write_text('{"score": NaN}', encoding="utf-8")
         res_nan = run_py(SYNC_SCRIPT, "--metrics-dir", str(metrics_dir), "--paper-dir", str(paper_dir))
         self.assertNotEqual(res_nan.returncode, 0)
+        (metrics_dir / "bad_nan.json").write_text(
+            '{"scenarios": [1, 2, 3, 4, 5, 6, 7, {"gain": Infinity}]}', encoding="utf-8-sig"
+        )
+        res_deep_inf = run_py(SYNC_SCRIPT, "--metrics-dir", str(metrics_dir), "--paper-dir", str(paper_dir))
+        self.assertNotEqual(res_deep_inf.returncode, 0)
+        (metrics_dir / "bad_nan.json").unlink()
+
+        # Clean UTF-8-BOM JSON must still sync cleanly
+        (metrics_dir / "bom_ok.json").write_text('{"bom_metric": 3.14}', encoding="utf-8-sig")
+        self.assertEqual(run_py(SYNC_SCRIPT, "--metrics-dir", str(metrics_dir), "--paper-dir", str(paper_dir)).returncode, 0)
 
     def test_04_plan_live_rules_strict_field_validation_and_handoff_cap(self) -> None:
         run_py(INIT_SCRIPT, str(self.root))
@@ -928,6 +946,184 @@ Unfortunately, the stationary kernel is merely valid within $\pm 10\%$ perturbat
         self.assertEqual(res_html_ok.returncode, 0, res_html_ok.stdout)
         self.assertIn("PASS (0 hard HTML failures)", res_html_ok.stdout)
         self.assertNotIn("[WARN]", res_html_ok.stdout)
+
+    def test_13_v16_math_glyph_freshness_json_payload_and_csv_decimals(self) -> None:
+        import pymupdf as fitz  # type: ignore
+
+        self.assertEqual(run_py(INIT_SCRIPT, str(self.root)).returncode, 0)
+        self._write_confirmed_plan(self.root / "00_plan.md")
+        paper_dir = self.root / "04_paper"
+        metrics_dir = self.root / "03_outputs" / "metrics"
+        src_dir = self.root / "02_src"
+
+        # 1. PDF containing merged '\inI' (from '\in\mathcal{I}') MUST fail with PDF_UNRENDERED_LATEX
+        bad_pdf = paper_dir / "report.pdf"
+        doc_bad = fitz.open()
+        p1 = doc_bad.new_page()
+        p1.insert_text((72, 100), r"Cohort total Q=∑i\inIqi has unrendered set membership.")
+        doc_bad.save(str(bad_pdf))
+        doc_bad.close()
+
+        # Unbalanced inline '$' in report.md + unfinished '待队长汇总' in AI协作记录.md + unsafe inline math in build_report.py
+        paper_md = paper_dir / "report.md"
+        paper_md.write_text(
+            "# Report\n\n"
+            "Valid cardinality $|\\mathcal{J}| = 10$, but broken inline math $Q = \\sum_{i \\in I} q_i here.\n",
+            encoding="utf-8",
+        )
+        ai_log_md = self.root / "AI协作记录.md"
+        ai_log_md.write_text(
+            "# AI 协作记录\n\n## 03 成本与时间\n新增投入和费用仍待队长汇总。\n",
+            encoding="utf-8",
+        )
+        builder_py = paper_dir / "build_report.py"
+        builder_py.write_text(
+            "import re\n"
+            "def conv(text):\n"
+            "    def repl(m):\n"
+            "        e = m.group(1)\n"
+            "        e = re.sub(r'\\\\mathcal\\{([A-Za-z]+)\\}', r'\\1', e)\n"
+            "        e = re.sub(r'\\\\in(?![a-zA-Z])', '∈', e)\n"
+            "        return e\n"
+            "    return re.sub(r'\\$([^$]+)\\$', repl, text)\n",
+            encoding="utf-8",
+        )
+
+        res_v16_fail = run_py(
+            AUDIT_SCRIPT,
+            str(paper_md),
+            "--plan",
+            str(self.root / "00_plan.md"),
+            "--src-dir",
+            str(src_dir),
+            "--pdf",
+            str(bad_pdf),
+        )
+        self.assertEqual(res_v16_fail.returncode, 2)
+        self.assertIn("PDF_UNRENDERED_LATEX", res_v16_fail.stdout)
+        self.assertIn("MD_UNBALANCED_MATH", res_v16_fail.stdout)
+        self.assertIn("PLACEHOLDER", res_v16_fail.stdout)
+        self.assertIn("SRC_INLINE_MATH_UNSAFE", res_v16_fail.stdout)
+
+        # 2. Clean PDF (including Python f-string code snippet and '\inputs' path text), balanced Markdown,
+        #    finalized AI协作记录.md, and wrapper-last + zero-backslash assertion in build_report.py -> PASS
+        doc_ok = fitz.open()
+        p_ok = doc_ok.new_page()
+        p_ok.insert_text((72, 100), "Rendered math Q = sum i in I q_i and code f'page_{idx:02d}.png' in 02_src\\inputs.py")
+        doc_ok.save(str(bad_pdf))
+        doc_ok.close()
+
+        paper_md.write_text(
+            "# Report\n\n"
+            "Balanced math $|\\mathcal{J}| = 2,034$, $Q = \\sum_{i \\in \\mathcal{I}} q_i$, and literal \\$25 cost (`$HOME`).\n",
+            encoding="utf-8",
+        )
+        ai_log_md.write_text(
+            "# AI 协作记录\n\n## 03 成本与时间\n累计 16 小时，合计 25 美元。\n",
+            encoding="utf-8",
+        )
+        builder_py.write_text(
+            "import re\n"
+            "def conv(text):\n"
+            "    def repl(m):\n"
+            "        e = m.group(1)\n"
+            "        e = re.sub(r'\\\\in(?![a-zA-Z])', '∈', e)\n"
+            "        e = re.sub(r'\\\\mathcal\\{([A-Za-z]+)\\}', r'\\1', e)\n"
+            '        if "\\\\" in e:\n'
+            "            raise ValueError(e)\n"
+            "        return e\n"
+            "    return re.sub(r'\\$([^$]+)\\$', repl, text)\n",
+            encoding="utf-8",
+        )
+
+        res_v16_ok = run_py(
+            AUDIT_SCRIPT,
+            str(paper_md),
+            "--plan",
+            str(self.root / "00_plan.md"),
+            "--src-dir",
+            str(src_dir),
+            "--pdf",
+            str(bad_pdf),
+        )
+        self.assertEqual(res_v16_ok.returncode, 0, res_v16_ok.stdout)
+        self.assertNotIn("SRC_INLINE_MATH_UNSAFE", res_v16_ok.stdout)
+
+        # 3. Stale PDF & HTML vs newer metrics JSON + invalid NaN JSON payload in HTML dashboard
+        html_dash = self.root / "03_outputs" / "dashboard.html"
+        html_dash.write_text(
+            "<!doctype html><html><body>"
+            '<script type="application/json" id="data">{"fill": NaN}</script>'
+            "<script>console.log(1);</script></body></html>",
+            encoding="utf-8",
+        )
+        res_bad_json = run_py(AUDIT_SCRIPT, "--check-html", str(html_dash))
+        self.assertEqual(res_bad_json.returncode, 2)
+        self.assertIn("HTML_INVALID_JSON_PAYLOAD", res_bad_json.stdout)
+
+        html_dash.write_text(
+            "<!doctype html><html><body>"
+            '<script type="application/json" id="data">{"fill": 1.0}</script>'
+            "<script>console.log(1);</script></body></html>",
+            encoding="utf-8",
+        )
+        old_ts = time.time() - 30.0
+        os.utime(bad_pdf, (old_ts, old_ts))
+        os.utime(html_dash, (old_ts, old_ts))
+        (metrics_dir / "fresh.json").write_text('{"fill": 1.0}', encoding="utf-8")
+
+        res_stale = run_py(
+            AUDIT_SCRIPT,
+            str(paper_md),
+            "--metrics-dir",
+            str(metrics_dir),
+            "--pdf",
+            str(bad_pdf),
+            "--check-html",
+            str(html_dash),
+        )
+        self.assertEqual(res_stale.returncode, 2)
+        self.assertIn("STALE_PDF_VS_METRICS", res_stale.stdout)
+        self.assertIn("STALE_HTML_VS_METRICS", res_stale.stdout)
+
+        # Touch PDF and HTML so they are newer than metrics -> PASS
+        os.utime(bad_pdf, None)
+        os.utime(html_dash, None)
+        res_fresh = run_py(
+            AUDIT_SCRIPT,
+            str(paper_md),
+            "--metrics-dir",
+            str(metrics_dir),
+            "--pdf",
+            str(bad_pdf),
+            "--check-html",
+            str(html_dash),
+        )
+        self.assertEqual(res_fresh.returncode, 0, res_fresh.stdout)
+
+        # 4. Deliverable CSV decimal-precision outlier & handoff 'MM Step 6' + companion pointer check
+        csv_file = self.root / "03_outputs" / "alloc.csv"
+        rows = ["提单号,子仓,配货方数"] + [f"B-{i:02d},W1,10.0000" for i in range(11)] + ["B-99,W1,10.00001"]
+        csv_file.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        res_dec_warn = run_py(AUDIT_SCRIPT, "--check-csv", str(csv_file))
+        self.assertEqual(res_dec_warn.returncode, 0)
+        self.assertIn("CSV_INCONSISTENT_DECIMALS", res_dec_warn.stdout)
+        res_dec_strict = run_py(AUDIT_SCRIPT, "--check-csv", str(csv_file), "--strict-csv")
+        self.assertEqual(res_dec_strict.returncode, 2)
+        self.assertIn("CSV_INCONSISTENT_DECIMALS", res_dec_strict.stdout)
+
+        handoff = self.root / "handoff.md"
+        handoff.write_text(
+            "# handoff.md\n"
+            "- **Current Step**: MM Step 6\n"
+            "- **Next Role**: [Done]\n"
+            "- **File Pointers**: `AI协作记录.md`、`作品说明单_missing.md`\n",
+            encoding="utf-8",
+        )
+        res_ho_broken = run_py(AUDIT_SCRIPT, "--check-handoff", str(handoff), "--project-root", str(self.root))
+        self.assertEqual(res_ho_broken.returncode, 2)
+        self.assertIn("HANDOFF_BROKEN_PTR", res_ho_broken.stdout)
+        self.assertIn("Checked 6/6 mandatory rule field(s)", res_ho_broken.stdout)
 
 
 if __name__ == "__main__":
