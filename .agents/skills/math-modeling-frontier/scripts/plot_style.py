@@ -51,7 +51,7 @@ JOURNAL_MARKERS: List[str] = ["o", "s", "^", "D", "v", "P"]
 ACADEMIC_LINESTYLES = JOURNAL_LINESTYLES
 ACADEMIC_MARKERS = JOURNAL_MARKERS
 
-# Minimalist academic typography, table & interactive dashboard palette (Charcoal-Ink & Oxford Slate-Navy; zero green tint)
+# Interactive dashboard / tech-report palette (Charcoal-Ink & Oxford Slate-Navy; zero green tint)
 DOCUMENT_PALETTE = {
     "heading": "#111827",      # Title, H1/H2, table caption & table header text (Deep Academic Ink)
     "subhead": "#1E3A5F",      # H3 subheadings & inline code text (Oxford Slate-Navy)
@@ -65,6 +65,22 @@ DOCUMENT_PALETTE = {
     "accent": "#2B4C7E",       # Primary UI accent border / active indicator
     "accent_text": "#1E40AF",  # Positive delta text & interactive link color
     "accent_bg": "#EFF6FF",    # Focus table row & positive delta pill background
+}
+
+# Formal contest paper monochrome palette (strict pure-black ink on white paper)
+DOCUMENT_PALETTE_MONOCHROME = {
+    "heading": "#000000",
+    "subhead": "#000000",
+    "body": "#000000",
+    "muted": "#000000",
+    "rule": "#000000",
+    "border": "#000000",
+    "surface": "#FFFFFF",
+    "surface_alt": "#FFFFFF",
+    "header_bg": "#000000",
+    "accent": "#000000",
+    "accent_text": "#000000",
+    "accent_bg": "#FFFFFF",
 }
 
 
@@ -102,7 +118,7 @@ def apply_academic_style(lang: str = "en", scale: float = 1.0) -> None:
         en_font = _pick_available_font(["Arial", "Helvetica", "Liberation Sans", "DejaVu Sans"])
         font_family = [en_font, "DejaVu Sans"] if en_font else ["DejaVu Sans"]
 
-    charcoal = "#222222"
+    charcoal = "#000000"
     mpl.rcParams.update({
         # Typography & vector embedding
         "font.family": "sans-serif",
@@ -204,7 +220,7 @@ def label_panels(
             fontweight="bold",
             va="top",
             ha="left",
-            color="#111111",
+            color="#000000",
         )
 
 
@@ -329,7 +345,7 @@ def plot_delta_bars(
                 ha="center",
                 va="bottom" if val >= 0 else "top",
                 fontsize=7.0,
-                color="#1F1F1F",
+                color="#000000",
             )
 
     ax.set_ylim(ymin - 0.22 * span, ymax + 0.24 * span)
@@ -360,7 +376,7 @@ def plot_tornado(
     ord_low = lows[order]
     ord_high = highs[order]
 
-    ax.axvline(baseline, color="#222222", linewidth=0.9, zorder=3)
+    ax.axvline(baseline, color="#000000", linewidth=0.9, zorder=3)
     ax.barh(y_pos, ord_low - baseline, left=baseline, height=0.56, color=JOURNAL_COLORS[0], alpha=0.88, label=low_label)
     ax.barh(y_pos, ord_high - baseline, left=baseline, height=0.56, color=JOURNAL_COLORS[1], alpha=0.88, label=high_label)
 
@@ -650,6 +666,18 @@ def check_figure_layout(fig: plt.Figure) -> List[str]:
             ):
                 warnings.append(f"Annotation clipped at figure boundary: '{s[:30]}'")
             boxes.append((s[:30], bb))
+
+        leg = ax.get_legend()
+        if leg is not None and leg.get_visible():
+            leg_bb = leg.get_window_extent(renderer=renderer)
+            if (
+                leg_bb.x0 < fig_bbox.x0 - 2
+                or leg_bb.x1 > fig_bbox.x1 + 2
+                or leg_bb.y0 < fig_bbox.y0 - 2
+                or leg_bb.y1 > fig_bbox.y1 + 2
+            ):
+                warnings.append("Legend clipped at figure boundary")
+            boxes.append(("Legend", leg_bb))
 
     for i in range(len(boxes)):
         for j in range(i + 1, len(boxes)):

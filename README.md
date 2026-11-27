@@ -2,12 +2,12 @@
 
 # `math-modeling-frontier`
 
-**面向新一代旗舰模型的极简双层数模竞赛工程 Skill（v1.6）**
-*Zero Cognitive Shackles · Dual-Tier Relay · O(1) Cross-Model Memory · Nature/Science Visuals · Zero-Transcription LaTeX*
+**面向新一代旗舰模型的极简双层数模竞赛工程 Skill（v2.0）**
+*Rule #0 First · Substantive Math & Narrative · O(1) Relay Memory · Nature/Science Visuals · Zero-Transcription LaTeX*
 
 [![CI](https://github.com/monesy231/math-modeling-frontier/actions/workflows/ci.yml/badge.svg)](https://github.com/monesy231/math-modeling-frontier/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-2B4C7E.svg)](./LICENSE)
-[![Core Protocol](https://img.shields.io/badge/SKILL.md-44_Lines-009E73.svg)](./.agents/skills/math-modeling-frontier/SKILL.md)
+[![Core Protocol](https://img.shields.io/badge/SKILL.md-43_Lines-009E73.svg)](./.agents/skills/math-modeling-frontier/SKILL.md)
 [![Relay Memory](https://img.shields.io/badge/Relay_Memory-O(1)_%E2%89%A480_Lines-D95F02.svg)](#2-o1-分层接力记忆跨模型切换不失忆不爆上下文)
 [![Works With](https://img.shields.io/badge/Agents-Antigravity%20%7C%20Codex%20%7C%20Claude%20Code%20%7C%20Cursor-7570B3.svg)](#五-一键安装与本地自测)
 
@@ -19,13 +19,14 @@
 
 市面上绝大多数高星数模 Skill，本质是在给上一代弱模型打补丁：动辄几千行保姆式 SOP、硬编码“评价题必用熵权法+TOPSIS”的套路表。把这套紧箍咒套在当代顶级推理模型上，**不仅白白吃掉上下文，还会把模型原生的数学直觉和创新上限反向锁死**。
 
-而直接裸跑顶级模型打 72–99 小时数模竞赛，又必然踩中三个真实痛点：
+而直接裸跑顶级模型打 72–99 小时数模竞赛，又必然踩中四个真实痛点：
 1. **死磕单题卡死全局**：遇到非凸优化不收敛或病态求解器，反复修到第 8 遍把后面几问拖烂尾；
-2. **通篇写满防御性废话**：模型脑补严苛评委，在摘要和结果段疯狂自我捅刀、堆砌免责声明、把试错日记写进正文；
-3. **长程漂移与“手抄幻觉”**：切模型忘上下文、半夜改代码重跑后论文里残留旧数字、默认 Matplotlib 廉价丑图、匿名/查重低级失误。
+2. **通篇防御废话或“审计日志化”**：要么在摘要和结果段疯狂自我捅刀，要么把微观校验过程（`LOO-45`、`2×2` 析因、补丁探针）写成流水账，丢掉摘要叙事张力、正文数学推导厚度与文献参数依据；
+3. **重工程轻正文 / 180 页代码倾倒**：把全套画图/排版/打包脚本一股脑倾倒入 PDF 附录，却忽视题面本身的核心提问与正规竞赛排版规范；
+4. **长程漂移与“手抄幻觉”**：切模型忘上下文、半夜改代码重跑后论文里残留旧数字、默认 Matplotlib 廉价丑图、匿名/查重低级失误。
 
-**`math-modeling-frontier` 的核心哲学只有一句话：**
-> **把 99% 的推理自由度还给旗舰模型，把“防卡死、防失忆、防编数、防写怂、大刊审美”全部压进 44 行极简协议 + 4 个有完整 E2E 测试与 CI 保障的确定性 Python 脚本。**
+**`math-modeling-frontier` v2.0 的核心哲学：**
+> **以“题目要求、官方规则与问题回答”为最大优先（Rule #0），将 99% 建模创造力还给旗舰模型；把防卡死、防失忆、防编数与“摘要叙事张力 + 数学推导厚度 + 参数文献依据 + 精简附录”全部压进 43 行极简协议与 4 个有完整 E2E 测试与 CI 保障的 Python 脚本。**
 
 ---
 
@@ -41,68 +42,58 @@
   <img src="./assets/nature_3panel_showcase.png" alt="Nature/Science 3-Panel Publication Showcase" width="96%" />
 </p>
 
-> 上图为 `python plot_style.py --self-test` 一键生成的 *Nature/Science* 双栏（`7.2 in`）三联图实拍：粗体 `a, b, c` 面板标识、无框图例、95% CI 置信带、灵敏度龙卷风图、零中心自动反色 `RdBu_r` 热力图，支持中英文一键切换。
+> 上图为 `python plot_style.py --self-test` 一键生成的 *Nature/Science* 双栏（`7.2 in`）三联图实拍：粗体 `a, b, c` 面板标识、纯黑 `#000000` 坐标与轴线、无框图例、95% CI 置信带、灵敏度龙卷风图、零中心自动反色 `RdBu_r` 热力图，支持中英文一键切换。
 
 ---
 
-## 二、 六大核心亮点
+## 二、 七大核心亮点（v2.0 实质学术力 + 工程防呆双均衡）
+
+### 0. 最高优先级原则（Rule #0）：以赛题要求、官方规则与问题本身为最大优先
+- **`00_problem/` 绝对压倒一切通用默认**：无论是正文与附录的分开页限、纯黑白排版还是彩色要求、支撑包是否禁止附带原题原始数据，还是某道小问指定的指标口径，**均以 `00_problem/` 实时提取规则为最高准绳**。
+- **`Prompt Sub-Question & Requirement Traceability Checklist`**：在 `00_plan.md` 强制建立“题面明示/隐含子问题 → 模型/指标 → 正文小节 → 核验状态”全链路对照表，防止沉迷工程自证而跑偏或漏答核心赛题。
 
 ### 1. 旗舰思考 × 主力执行 × 旗舰审查（零负担 `MM Step 1–6` 一行切换 + `Gate R` 写前总审）
-- **旗舰 `[F]` 零负载裸跑**：`MM Step 1`（选题/EDA/范式自博弈/定路线）与 `MM Step 4`（写前技术总审）**不加载任何额外参考文件**，只看 44 行 `SKILL.md`，彻底释放原厂高智商。
-- **一行口令切模型（v1.1）**：告别来回粘贴上百字长提示词——每个步骤结束后，下一棒的一行短指令（如 `MM Step 2`）直接自动印在 `handoff.md` 末尾，切会话粘贴 10 个字即可精准接力，零贴错风险。
-- **传统数模铁序（先算通审过，再动笔写论文）**：在计算和写作之间硬插 **Step 4 旗舰写前总审（`Gate R`）**，确认数学自洽、物理/常识合理、残差无异常、证据链无缺口后才放行写作；有硬伤直接写返工单回 `[W]`，避免带着错数写完 25 页再返工。
+- **旗舰 `[F]` 零负载裸跑**：`MM Step 1` 与 `MM Step 4` **不加载任何额外参考文件**，只看 43 行 `SKILL.md`，彻底释放原厂高智商。
+- **双支柱 `Gate R` 写前总审**：在动笔写论文前同步审计**数学实质与文献依据**（每问第一性原理推导、分析性质/可识别性、3 级参数溯源）与**统计/代码保真度**（同协议嵌套 CV、单源超参传递、边界反例与同刻不动点重检）。
 
 ### 2. O(1) 分层接力记忆：跨模型切换不失忆、不爆上下文
 | 温度层 | 文件 | 读写规则 | 为什么永远不膨胀？ |
 | :--- | :--- | :--- | :--- |
-| **热层 (HOT)** | `handoff.md` | **每次切模型唯一必读文件** | **默认硬上限 ≤ 80 行（支持 `--max-lines` 按题量调节），每次交接直接覆写（绝不追加）**，并由 `audit_paper.py --check-handoff` 强制校验行数、禁贴代码块与指针真实性——从第 1 小时到第 96 小时恒定 ~900 tokens！ |
-| **基准层 (CANONICAL)** | `00_plan.md` | 按需读对应小节 | 存动态提取的最新赛制红线（`--plan 00_plan.md` 硬拦截任何未清除的 `[EXTRACT FROM 00_problem/]` / `[待核验]` 项）、`Q1→Qn` 数学主干、统一符号总表、实验举证表与门禁状态。 |
-| **冷层 (COLD)** | `01_log.md` | **默认绝不加载**（只追加） | 存 EDA 统计细节、外部数据/引文出处、废弃路线与熔断档案，排错时才按需检索。 |
+| **热层 (HOT)** | `handoff.md` | **每次切模型唯一必读文件** | **默认硬上限 ≤ 80 行（支持 `--max-lines`），每次交接直接覆写**，并由 `audit_paper.py --check-handoff` 校验行数、禁贴代码块与指针真实性。 |
+| **基准层 (CANONICAL)** | `00_plan.md` | 按需读对应小节 | 存动态提取赛制红线（`--plan` 硬拦截未清除占位符）、**题面问题对照清单**、`Q1→Qn` **数学推导主脊**、**3 级参数/权重溯源表**、统一符号表与门禁状态。 |
+| **冷层 (COLD)** | `01_log.md` | **默认绝不加载**（只追加） | 存 EDA 统计细节、**真实文献 DOI/URL 与数据出处**、废弃路线与熔断档案，排错或写文献时按需检索。 |
 | **零拷贝指针** | `03_outputs/metrics/` & `figs/` | 仅传路径与一行指标 | 严禁把大表/代码粘进 Markdown 记忆，彻底杜绝上下文腐烂。 |
 
-### 3. 防卡死双保险：全题 Baseline 优先 + 3-Attempt & 超时熔断
-- **全局先贯通**：全题 `Q1 → Qn` 端到端 Baseline 跑通并落盘 `baseline.json`（过 `Gate P1`）之前，禁止在任何单问深挖高复杂度算法；通过门禁即 `git commit` 快照防改崩。
-- **防死等 + 防死磕**：重求解先小规模 `N` 冒烟并设显式超时；同一瓶颈连续 **3 次根因修复失败**、超时或出现破坏假设的数据异常，**立即停机禁止第 4 次盲修**，通过 `handoff.md` 交回旗舰 `[F]` 按 `L1 精确解 → L2 机理保真近似（附间隙/残差界）→ L3 解析上下界/蒙特卡洛区间` 体面降级。
+### 3. 四大实质写作与推导硬校准（告别“高工程分、低学术观感”）
+经过 9 轮真题盲审打磨，v2.0 在 [writing.md](./.agents/skills/math-modeling-frontier/references/writing.md)、[audit.md](./.agents/skills/math-modeling-frontier/references/audit.md) 与 [audit_paper.py](./.agents/skills/math-modeling-frontier/scripts/audit_paper.py) 中同步落地四项实质标准（**Stage 2 自动信号 + 5 轴评分表**）：
+1. **摘要四拍叙事张力（`ABS-ARC` / `[ABSTRACT_AUDIT_CLUTTER]`）**：禁止把摘要写成审计报告流水账（堆砌 `LOO-expID 45`、`2×2` 析因、Holm 微观参数或 `"assumed function / candidate for field testing"`）；强制采用 **“核心冲突立意 → 统一机理主线+旗舰量化成果 → 紧凑稳健性包络 → 明确可落地决策”** 四拍结构。
+2. **正文数学推导厚度（`MATH-DEPTH` / `[THIN_MATH_DERIVATION]`）**：禁止“丢一个孤立公式+二十行 CV 刷分表”或零公式建模节；要求每道核心题遵循 **“第一性原理 → 分步推演至编号控制方程/似然/目标 → 解析性质/可识别性/闭式推论 → 求解收敛判据”** 四步弧线，`audit_paper.py` 自动盘点正文各节显示公式数量。
+3. **权重与物理参数 3 级文献溯源（`PARAM-GROUND` / `[UNGROUNDED_PARAM_WEIGHT]`）**：严禁无依据的魔数公式（如手拍指数或任意效用权重）；所有权重与物理参数必须明确标定为 **Tier 1 数据识别**（MLE/CV/CRITIC 附 SE/CI）、**Tier 2 物理定律/真实文献引用**（`\cite{...}` 记录于 `01_log.md`）或 **Tier 3 边界情景先验**（附带单纯形/敏感性扫面证明排序不变性）。
+4. **精简策划型 PDF 附录（`APP-LEAN` / `[APPENDIX_BLOAT]` / `[APPENDIX_BOILERPLATE_CODE]`）**：PDF 附录默认精选 **1 页复现清单 + 扩展证明/表 + 核心建模求解模块**（除非 `00_problem/` 明示要求全源码附入论文）；将 `build_report.py`、`plot_style.py`、`package_support.py`、`audit_paper.py` 等工程脚手架与完整可运行工程留在独立 **支撑包 ZIP**（并按赛规剔除官方原题与原始数据）。
 
-### 4. 数据 → 论文“零手抄”同步 + 过期与孤儿表硬拦截（0% 旧数/幽灵表幻觉）
-- 内置 [sync_metrics.py](./.agents/skills/math-modeling-frontier/scripts/sync_metrics.py)：
-  - 自动将 `03_outputs/metrics/*.json` 编译为盲审洁净的 `04_paper/generated_metrics.tex` 数值宏（自动拒绝 `NaN/Inf`、**中文字段稳定生成唯一 ASCII 宏名、任何重名碰撞直接报错中止并列出双方原始键名**、自动格式化 95% CI 区间），**半夜改代码重跑后全论文数字一键原子更新**；
-  - 自动将 `03_outputs/metrics/*.csv` 编译为右对齐、自动加粗最优值、零竖线的 **Booktabs 标准三线表**（`\input{generated_tables/*.tex}`），同步记录 `_sync_manifest.json` 溯源清单并**自动清理已撤回实验的孤儿旧表**。
-- [audit_paper.py](./.agents/skills/math-modeling-frontier/scripts/audit_paper.py) 内置 **`[STALE_METRICS_TEX]` + `[STALE_PDF_VS_METRICS]` + `[STALE_HTML_VS_METRICS]` + `[ORPHAN_GENERATED_TABLE]` + `[MISSING_TABLE_SOURCE]` 多重同源新鲜度硬门禁**：无论是 LaTeX 路线还是 Python/ReportLab/Markdown 报告与离线看板路线，只要改了实验指标忘重编 PDF/看板或撤回 CSV 后正文仍引用旧表，终审直接 `FAIL` 拦截。
+### 4. 防卡死双保险 & 同源“零手抄”同步
+- **全题 Baseline 先行 + 3-Attempt 熔断**：全题端到端贯通前禁止单问死磕；连续 3 次根因修复失败立即交回 `[F]` 按 `L1 精确解 → L2 机理近似 → L3 解析/MC 区间` 降级。
+- **单源配置 & 零手抄同步**：超参调优结果从唯一配置源传遍所有重抽样（禁静默回退默认值）；[sync_metrics.py](./.agents/skills/math-modeling-frontier/scripts/sync_metrics.py) 自动生成 `generated_metrics.tex`（全深度数组 `NaN/Inf` 校验 + 中文键唯一 ASCII 宏）与 Booktabs 三线表，配合 `audit_paper.py` 新鲜度/孤儿表门禁彻底杜绝旧数漂移。
 
-### 5. 大刊科研审美编入代码，1 行 `❌→✅` 精准校准不啰嗦
-- **图表审美靠代码不靠嘴**：[plot_style.py](./.agents/skills/math-modeling-frontier/scripts/plot_style.py) 内置 *Nature / Science / PNAS* 单栏（`3.5 in`）、1.5 栏（`5.0 in`）、双栏（`7.2 in`）物理宽度、色盲/灰度安全低饱和色板 + 线型/标记双冗余、`label_panels()`、`plot_with_ci()`、`plot_delta_bars()`（多尺度接近序列有符号差值柱图）、`plot_tornado()`、`plot_diverging_heatmap()`、`plot_pipeline_diagram()`、`add_zoom_inset()`、`group_close_points()` 及 `.pdf` + 300 DPI `.png` 双导出防遮挡自检；[visual.md](./.agents/skills/math-modeling-frontier/references/visual.md) 仅 **11 行**。
-- **反防御与论文排版靠微对照**：写作（Step 5）与审稿（Step 6）**物理会话+文件双隔离**；[writing.md](./.agents/skills/math-modeling-frontier/references/writing.md) 仅 **28 行**，用 1 行 `❌→✅` 精准消灭 D1–D5 防御废话、试错日记、照搬题干和廉价竖线表，局限性统一收口到文末一节。
+### 5. 大刊科研审美 & 纯黑正式竞赛排版双模态
+- **默认正式竞赛纯黑学术排版（`DOCUMENT_PALETTE_MONOCHROME`）**：正文/Word/TeX 默认纯黑 `#000000` 字体与 Booktabs 三线表、纯白 `#FFFFFF` 底色，零装饰色块；交互式 HTML 看板或现代技术报告可选用 `DOCUMENT_PALETTE`（Charcoal-Ink + Oxford Slate-Navy）。
+- **图件代码防重叠（`plot_style.py`）**：坐标轴/刻度/面板字母统一纯黑 `#000000`，内置 `plot_with_ci()`、`plot_delta_bars()`、`plot_tornado()`、`plot_diverging_heatmap()`、`plot_pipeline_diagram()`、`group_close_points()`，且 `check_figure_layout()` 自动检测 **图例越界裁剪与标注撞图例**。
 
-### 6. 原始数据防篡改封条 + 交付物 CSV 审计 + 独立两阶段红队终审 + 真 LaTeX 编译 CI 保障
-- **原始数据只读与 SHA-256 防篡改封条（v1.3）**：`00_problem/` 与 `01_data/raw/` 严格只读（所有清洗与派生数据一律写入 `01_data/clean/`）；`init_project.py --lock-raw` 自动生成 `01_data/.raw_checksums.json` 校验封条，`audit_paper.py --verify-raw` 同时做 **SHA-256 逐文件完整性校验**（篡改/删除原文件直接 `FAIL`）与 **`02_src/` 静态写拦截**（拦截任何脚本往 `01_data/raw/` 覆盖写或删文件）。
-- **实战淬炼的交付物 CSV、反例探针与配套文档核验体系（v1.4）**：
-  - 在 Step 2/3/4 引入**独立于求解器的原始输入黑盒核验器**（`verify.py`，要求直读原始工作簿/CSV、使用整数刻度守恒与 `zip_longest` 全长比对并拦截静默截断型 `zip()`）、**负向篡改探针**（覆盖硬约束违约、提交文件末尾多行、指标表替换与文件缺失）、**2 元素同属性边界反例与分等级容量帽核查**、**开放可行域松弛上下界自洽**、**单因素（ceteris paribus）消融与反事实关闭净增益**，以及**块自助法 vs. 蒙特卡洛扰动区间溯源**；
-  - `audit_paper.py --check-csv`（及 `--strict-csv`）自动审计提交 CSV（拦截 `UTF-8 BOM`、`NaN/Inf`、错列、完全重复行、未合并的重复复合主键，以及四位小数等固定精度列中的异常位数漂移 `[CSV_INCONSISTENT_DECIMALS]`）；
-  - 自动发现并同源审计根目录官方配套文档（`作品说明单*.md`、`AI协作记录*.md`），硬拦截**未删除的官方模板填写提示**（`[TEMPLATE_INSTRUCTION_LEAK]`）、**待队长汇总/待确认等未收口占位符**（`[PLACEHOLDER]`）、**超过 60 字的一句话概述**（`[SUMMARY_OVER_60_CHARS]`）、**自相矛盾的同值变化笔误**（如 `"由 2,586 票降至 2,586"`，`[DEGENERATE_CHANGE]`）以及**正文/说明单声称页数与实际编译 PDF 页数不符**（`[PDF_PAGE_COUNT_MISMATCH]`），并对提交前待填报的报名队名/人数发出显式提醒（`[REGISTRATION_PLACEHOLDER]`）。
-- **多轮红队终审沉淀的硬页限、可回放证据链与工程便携性门禁（v1.5）**：
-  - `audit_paper.py` 内置 **`--max-pages` / `00_plan.md` Sec. 0 硬页限自动拦截**（`[PDF_OVER_PAGE_LIMIT]`）、**赛中新增官方文件未封存硬拦截**（`--verify-raw` 下 `[RAW_UNSEALED_FILE]` 直接 `FAIL`）、**正文路径引用附图智能豁免**（识别正文中直接引用的补充图表路径，消除 `[UNUSED_FIG]` 误报）、**`04_paper/*.py` 构建脚本跨平台字体回退告警**（`[SRC_OS_FONT_HARDCODE]`）与 **`--check-html` 离线交互看板审计**；`plot_style.py` 内置 `group_close_points()` 在最终印刷尺寸下聚类拥挤散点；
-  - 在 Step 3–6 固化**双向边界反例与跨事件定案状态同步校验**（涵盖触发边界 `± ε` 与末单定案/同伴留存双场景）、**事后参数不变性测试**、**双口径官方指标与严格字典序同表披露**、**前推时序锁参验证（`E5`）**、**可回放结构化诊断证据链**（篡改替换合法策略文案或受保护票号仍必报错）以及**冷启动清缓存逐字节复现**。
-- **六轮旗舰终审闭环：PDF 公式零源码残余、同刻不动点重检与跨产物对账门禁（v1.6）**：
-  - **PDF 全集数学符号与去壳顺序双重防护**：针对脚本式 PDF 构建器（如 ReportLab `build_report.py`）先剥离 `\mathcal{I}` 再替换 `\in` 导致 `\inI` 漏网的隐蔽缺陷，`audit_paper.py` 全面升级 PDF 文本提取扫描器（`[PDF_UNRENDERED_LATEX]` 覆盖全部 LaTeX 关系/集合/希腊字母/上下标与 `\inI` 连写残余），静态扫描 `04_paper/*.py` 提醒“先替换符号再去壳 + 零反斜杠构建期断言”（`[SRC_INLINE_MATH_UNSAFE]`），并新增 Markdown 行内 `$` / `$$` 配对校验（`[MD_UNBALANCED_MATH]`）；
-  - **同刻单事件不动点重检（Intra-Event Fixed-Point Re-Pass）**：在 Step 4（`Gate R`）与 Step 6（`audit.md`）明确要求除跨事件状态清理外，必须用“同刻异构优先级双实体同时开窗”探针检验单事件循环——当后序高优实体同刻结清共享触发状态时，前序暂缓实体必须重检，杜绝单遍遍历顺序依赖残留；
-  - **跨产物同源锁与 HTML JSON 载荷深检**：要求报告构建器与看板在加载期做跨文件 `submission_policy` 与核心标量对账断言；`audit_paper.py` 新增 PDF/HTML 相对 `metrics/` 的新鲜度硬拦截、`--check-html` 对 `<script type="application/json">` 内嵌数据的严格有限值解析（拦截会令浏览器 `JSON.parse()` 崩溃的 `NaN`/`Infinity` 或 `@@DATA@@` 残留，`[HTML_INVALID_JSON_PAYLOAD]`）、`sync_metrics.py` 全深度数组 `NaN/Inf` 拦截，以及 `handoff.md` 对 `MM Step N` 与根目录伴随文档指针的完整校验。
-- Step 6 强制另开独立只读旗舰会话（**建议换用不同于写作模型的另一款旗舰模型交叉审稿**），先运行 [audit_paper.py](./.agents/skills/math-modeling-frontier/scripts/audit_paper.py)：
-  - **Stage 1 硬门禁（缺件或渲染失败一律 `FAIL`，绝不静默返回 0）**：按 6 项必填字段逐项核验 `00_plan.md` 赛规与来源、内部工程词与模板提示零泄漏、正文/代码（`02_src/`）/PDF 元数据零匿名与路径泄漏、PDF 提取文本零缺字乱码（`\ufffd`）与未渲染 LaTeX 源码残留、自称页数与 PDF 实际页数一致、`\ref` 无断链、无过期宏与孤儿表、指定的 `.pdf`/`.log`/目录必须真实存在且 `--render-pdf` 必须成功将 PDF **逐页转成 PNG**（自动注入 `.gitignore` 防止预览图污染仓库）供多模态旗舰“肉眼”审查每一页版面。
-  - **Stage 2 章节感知信号 + 最小手术精修**：自动识别 LaTeX/Markdown 章节标题与代码环境——**在文末 *Strengths, Weaknesses / Limitations / AI Report* 章节和代码附录中自动豁免 `D2/D5` 误报**，只在摘要/引言/建模/结果/结论里严抓防御性废话与 AI 腔，仅输出 `位置 | 类别 | 原句 | 建议替换` 手术表。
-- **真实交卷级 CI（Ubuntu 实编 `pdflatex` + Windows 跨平台矩阵）**：[tests/test_e2e_pipeline.py](./tests/test_e2e_pipeline.py) 不仅测试所有脚本正反路径，更在 Linux CI 中**实际调用 `pdflatex` 编译含中英文宏、三线表与 *Nature* 图件的 `main.tex → main.pdf`**，对同一次编译出的 `main.pdf` + `main.log` 跑通完整终审并渲染 PNG，随后删除 `main.pdf` 验证终审必然 `FAIL`。
+### 6. 实战淬炼的自动化红队与真 LaTeX 编译 CI（v2.0 实战增强）
+- **`--body-start-page` & `--max-appendix-pages` + 附录代码段豁免**：按正式竞赛规范精准区分封面/目录/正文/附录页码；自动识别附录源码清单页并仅豁免源码页面的 `[PDF_UNRENDERED_LATEX]` 检查（正文与散文公式保持 100% 零漏网扫描，且全本缺字 `\ufffd` 照查不误）。
+- **AST 级核验器审计 + 原数据防篡改封条**：用 Python `ast` 遍历核查 `verify.py` 中所有跨行 `zip(...)` 是否显式带 `strict=True` 或使用 `zip_longest`；`--verify-raw` 校验 `00_problem/` 与 `01_data/raw/` SHA-256 不可变封条；`--check-csv --strict-csv` 拦截 BOM、`NaN/Inf`、重复复合键与小数位数漂移；`--check-html` 审计离线看板 JSON 有限性与 JS 语法；`--render-pdf` 逐页光栅化供多模态肉眼终审。
+- **全链路 CI（Ubuntu 真编 `pdflatex` + Windows 矩阵）**：[tests/test_e2e_pipeline.py](./tests/test_e2e_pipeline.py) 覆盖 14 组端到端正反用例。
 
 ---
 
 ## 三、 横向对比
 
-| 维度 | 直接裸跑顶级模型 | 传统重型数模 Skill | `math-modeling-frontier` |
+| 维度 | 直接裸跑顶级模型 | 传统重型数模 Skill | `math-modeling-frontier` v2.0 |
 | :--- | :--- | :--- | :--- |
-| **规则体量 / 智商约束** | 0 约束，但易跑偏成拼盘 | 数千行 SOP + 固定算法表，反向锁死上限 | **44 行核心主控 + 3 个超薄参考（共 68 行）**，旗舰思考期零参考负载 |
-| **切模型记忆与操作负担** | 聊天越长越蠢，切窗口失忆 | 堆大段历史日志，吃爆上下文 | **O(1) `handoff.md`（≤80 行可配 + 硬校验）+ `MM Step 1–6` 一行切换** |
-| **遇到卡壳难题** | 死磕单题拖垮全队 | 死板卡死或胡编过关 | **全题 Baseline 先行 + 小规模限时 + 3-Attempt 熔断交回旗舰降级** |
-| **数据与论文一致性** | 易混用旧实验数、手抄出错 | 靠口头提醒，仍易漂移 | **`sync_metrics.py` 自动宏与三线表 + `[STALE_METRICS_TEX]` 硬拦截** |
-| **图表、写作与测试保障** | 默认丑图 + 通篇防御性废话 | 无测试无 CI，正则易误报 | **Nature 绘图代码库 + 章节感知终审 + PDF 逐页渲染 + 跨平台 CI** |
+| **规则优先级与建模自由度** | 0 约束，易漏答核心小问 | 数千行 SOP + 套路表，锁死上限 | **Rule #0 赛题/规则压倒一切 + 43 行极简协议**，旗舰思考期零参考负载 |
+| **实质学术深度与叙事张力** | 易写流水账或魔数拍脑袋 | 堆砌套话，缺严格证明 | **4 拍摘要 + 4 步推导弧线 + 3 级参数文献溯源 + 精简策划型附录** |
+| **切模型记忆与卡壳容错** | 上下文腐烂、死磕单题 | 粘贴大段日志爆窗口 | **O(1) `handoff.md`（≤80 行校验）+ `MM Step 1–6` + 3-Attempt 熔断** |
+| **数据一致性与红队终审** | 手抄旧数、匿名/排版踩雷 | 无测试无 CI，正则易误报 | **零手抄宏/表同步 + 分页限/AST/HTML/PDF 逐页渲染 + 5 轴终审表** |
 
 ---
 
@@ -111,19 +102,19 @@
 ```text
 .
 ├── .github/workflows/ci.yml                             # GitHub Actions 跨平台 CI（Ubuntu + Windows, Py3.11/3.12）
-├── tests/test_e2e_pipeline.py                           # 全链路自动化测试（覆盖 4 脚本正反用例与端到端闭环）
+├── tests/test_e2e_pipeline.py                           # 全链路自动化测试（14 组正反用例 + 真 LaTeX 编译）
 ├── assets/                                              # README 实拍效果图（均由内置 plot_style.py 生成）
 ├── .agents/skills/math-modeling-frontier/
-│   ├── SKILL.md                                         # [44行] 主控：双层角色、O(1) 接力、MM Step 1–6、6 条底线
+│   ├── SKILL.md                                         # [43行] 主控：Rule #0、双层角色、O(1) 接力、MM Step 1–6、6 条底线
 │   ├── references/
-│   │   ├── visual.md                                    # [11行] 仅 Step 3 加载：Nature/Science 视觉对照与印刷可读性
-│   │   ├── writing.md                                   # [28行] 仅 Step 5 加载：❌→✅ 反防御、硬页限、代码与正文一致性
-│   │   └── audit.md                                     # [29行] 仅 Step 6 加载：独立两阶段红队终审
+│   │   ├── visual.md                                    # [11行] 仅 Step 3 加载：Nature/Science 纯黑坐标与图例防撞规范
+│   │   ├── writing.md                                   # [46行] 仅 Step 5 加载：Rule #0、4 拍摘要、推导弧线、3 级参数溯源、精简附录
+│   │   └── audit.md                                     # [38行] 仅 Step 6 加载：独立两阶段红队终审 + 5 轴实质评分表
 │   └── scripts/
-│       ├── init_project.py                              # 一键建目录、O(1) 三层记忆（≤80行）、raw 封条与 plot_style.py
-│       ├── plot_style.py                                # Nature/Science/PNAS 矢量绘图、plot_delta_bars() 与散点聚类原语库
+│       ├── init_project.py                              # 一键建目录、Rule #0 问题对照表、参数溯源表、O(1) 记忆与 raw 封条
+│       ├── plot_style.py                                # Nature/Science 绘图、纯黑单色/看板双色板、图例防撞与散点聚类原语库
 │       ├── sync_metrics.py                              # JSON/CSV → LaTeX 数值宏与 Booktabs 三线表零手抄同步（全深度禁 NaN）
-│       └── audit_paper.py                               # Stage 1/2 终审 + 页限/公式残余/新鲜度/handoff/CSV/HTML/PDF 转 PNG
+│       └── audit_paper.py                               # v2.0 终审：正文/附录分页限、AST zip 校验、Stage 2 实质信号与 PDF 转 PNG
 ├── LICENSE
 └── README.md
 ```
@@ -155,12 +146,12 @@ python -m unittest discover -s tests -v
 
 | 步骤 | 推荐模型 | 1 行启动口令（直接复制） | 自动行为与门禁 |
 | :--- | :--- | :--- | :--- |
-| **Step 0→1** | `[F]` 旗舰 | `使用 math-modeling-frontier 执行 MM Step 1（先初始化并从 00_problem/ 提取最新规则）` | 提规、选题、EDA、3 范式自博弈 → 停在 **Gate M** 等拍板 |
-| **Step 2** | `[W]` 主力 | `使用 math-modeling-frontier 执行 MM Step 2` | 读 `handoff.md` → 清洗与全题 Baseline → 校验规则与接力包过 **Gate P1** |
-| **Step 3** | `[W]` 主力 | `使用 math-modeling-frontier 执行 MM Step 3` | 加载 `visual.md` → 深化对比/灵敏度 + `sync_metrics.py` + 大刊终图过 **Gate P2** |
-| **Step 4** | `[F]` 旗舰 | `使用 math-modeling-frontier 执行 MM Step 4` | 零参考负载技术总审 → 查数学/常识/残差 → 过 **Gate R** 才放行写作 |
-| **Step 5** | `[W]`/`[F]` | `使用 math-modeling-frontier 执行 MM Step 5` *(新开干净窗口)* | 仅加载 `writing.md`（物理隔离审稿）→ 新闻发布会写法 + 宏引用 + 编译 PDF |
-| **Step 6** | `[F]` 旗舰 | `使用 math-modeling-frontier 执行 MM Step 6` *(另开只读窗口/换另一旗舰)* | 仅加载 `audit.md` → 跑 `audit_paper.py`（含逐页转 PNG）→ Stage 1→2 最小手术 |
+| **Step 0→1** | `[F]` 旗舰 | `使用 math-modeling-frontier 执行 MM Step 1（先初始化并从 00_problem/ 提取最新规则）` | 提规、建问题对照表、EDA、推导主脊与参数溯源 → 停在 **Gate M** |
+| **Step 2** | `[W]` 主力 | `使用 math-modeling-frontier 执行 MM Step 2` | 读 `handoff.md` → 清洗、单源配置与全题 Baseline → 校验过 **Gate P1** |
+| **Step 3** | `[W]` 主力 | `使用 math-modeling-frontier 执行 MM Step 3` | 加载 `visual.md` → 同协议消融/灵敏度 + `sync_metrics.py` + 大刊终图过 **Gate P2** |
+| **Step 4** | `[F]` 旗舰 | `使用 math-modeling-frontier 执行 MM Step 4` | 零参考负载双支柱总审 → 核查题面覆盖、推导厚度、文献溯源与边界 → **Gate R** |
+| **Step 5** | `[W]`/`[F]` | `使用 math-modeling-frontier 执行 MM Step 5` *(新开干净窗口)* | 仅加载 `writing.md` → 4 拍摘要 + 推导正文 + 精简附录 + 单源构建 PDF |
+| **Step 6** | `[F]` 旗舰 | `使用 math-modeling-frontier 执行 MM Step 6` *(另开只读窗口/换另一旗舰)* | 仅加载 `audit.md` → `audit_paper.py`（逐页转 PNG）→ Stage 1 + 5 轴 Stage 2 |
 
 ---
 

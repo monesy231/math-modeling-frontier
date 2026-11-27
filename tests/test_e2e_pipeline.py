@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """
-End-to-end test suite for math-modeling-frontier v1.6 scripts:
-  - init_project.py (O(1) workspace + SHA-256 raw seal)
-  - plot_style.py (headless Agg backend + group_close_points + plot_delta_bars)
+End-to-end test suite for math-modeling-frontier v2.0 scripts:
+  - init_project.py (O(1) workspace + Prompt Traceability + Parameter Provenance + SHA-256 raw seal)
+  - plot_style.py (headless Agg backend + monochrome palette + legend collision guard + group_close_points + plot_delta_bars)
   - sync_metrics.py (Chinese/Unicode unique macros, collision abort, deep-array NaN guard, BOM tolerance, orphan pruning, manifest)
   - audit_paper.py (missing-artifact hard fail, failed PDF render hard fail,
-    field-by-field 00_plan.md Sec. 0 rule & page-limit gate, full math-token PDF scan
-    including merged '\\inI', Markdown '$' balance, PDF/HTML vs metrics freshness gate,
-    HTML JSON payload validation, cited supplementary figures, cross-platform font &
-    inline-math builder guards, deliverable CSV decimal consistency, raw-data seal,
-    orphan table guard, section-aware Stage 2)
+    field-by-field 00_plan.md Sec. 0 rule & body-vs-appendix page-limit gate,
+    appendix source-listing LaTeX exemption, AST zip-strict verifier check,
+    Stage 2 substantive checks [ABSTRACT_AUDIT_CLUTTER, THIN_MATH_DERIVATION,
+    UNGROUNDED_PARAM_WEIGHT, APPENDIX_BLOAT, APPENDIX_BOILERPLATE_CODE],
+    full math-token PDF scan including merged '\\inI', Markdown '$' balance,
+    PDF/HTML vs metrics freshness gate, HTML JSON payload validation, cited
+    supplementary figures, cross-platform font & inline-math builder guards,
+    deliverable CSV decimal consistency, raw-data seal, orphan table guard)
   - Real pdflatex compilation E2E submission test (enforced in CI via REQUIRE_LATEX_E2E=1)
 
 Run:
@@ -1124,6 +1127,203 @@ Unfortunately, the stationary kernel is merely valid within $\pm 10\%$ perturbat
         self.assertEqual(res_ho_broken.returncode, 2)
         self.assertIn("HANDOFF_BROKEN_PTR", res_ho_broken.stdout)
         self.assertIn("Checked 6/6 mandatory rule field(s)", res_ho_broken.stdout)
+
+    def test_14_v20_substantive_quality_appendix_body_limit_and_plot_legend(self) -> None:
+        import pymupdf as fitz  # type: ignore
+
+        self.assertEqual(run_py(INIT_SCRIPT, str(self.root)).returncode, 0)
+        plan_text = (self.root / "00_plan.md").read_text(encoding="utf-8")
+        self.assertIn("Prompt Sub-Question & Requirement Traceability Checklist", plan_text)
+        self.assertIn("Parameter Provenance", plan_text)
+        self._write_confirmed_plan(self.root / "00_plan.md")
+
+        paper_dir = self.root / "04_paper"
+        src_dir = self.root / "02_src"
+
+        # 1. PDF body-start-page, appendix code-listing exemption, --max-appendix-pages, and bloat/boilerplate signals
+        # Layout: p1 Summary, p2 TOC, p3-6 Body (4 pages), p7-40 Appendix (34 pages, > 1.5x body and > 30p)
+        pdf_40 = paper_dir / "submission.pdf"
+        doc = fitz.open()
+        doc.new_page().insert_text((72, 100), "Summary Page\nKey findings here.")
+        doc.new_page().insert_text((72, 100), "Table of Contents\n1. Model ... 1\nAppendix ... 5")
+        for b_idx in range(4):
+            doc.new_page().insert_text((72, 100), f"Body Section {b_idx + 1}\nClean rendered body text.")
+        doc.new_page().insert_text(
+            (72, 100),
+            "Appendix A\nA.1 Source Code Listings\nbuild_report.py\n" + r"latex_token = '\\in\\mathcal{I}'",
+        )
+        for a_idx in range(33):
+            doc.new_page().insert_text(
+                (72, 100),
+                f"02_src/solver_{a_idx}.py\n" + r"expr = re.sub(r'\\in', 'in', s) + r'\alpha'",
+            )
+        doc.save(str(pdf_40))
+        doc.close()
+
+        clean_tex = paper_dir / "main.tex"
+        clean_tex.write_text("\\documentclass{article}\n\\begin{document}\nShort clean paper.\n\\end{document}\n", encoding="utf-8")
+
+        # Body = 4 pages <= 5 -> PASS Stage 1, but PDF Stage 2 flags APPENDIX_BLOAT & APPENDIX_BOILERPLATE_CODE
+        res_body_ok = run_py(
+            AUDIT_SCRIPT,
+            str(clean_tex),
+            "--pdf",
+            str(pdf_40),
+            "--body-start-page",
+            "3",
+            "--max-pages",
+            "5",
+        )
+        self.assertEqual(res_body_ok.returncode, 0, res_body_ok.stdout)
+        self.assertIn("Main body: 4 page(s) starting at page 3; appendix starts on page 7", res_body_ok.stdout)
+        self.assertIn("Appendix source-listing pages exempted from LaTeX scan: 34 page(s)", res_body_ok.stdout)
+        self.assertIn("APPENDIX_BLOAT", res_body_ok.stdout)
+        self.assertIn("APPENDIX_BOILERPLATE_CODE", res_body_ok.stdout)
+
+        # Body = 4 pages > 3 -> HARD FAIL PDF_OVER_PAGE_LIMIT; Appendix = 34 > 20 -> HARD FAIL PDF_APPENDIX_OVER_LIMIT
+        res_body_over = run_py(
+            AUDIT_SCRIPT,
+            str(clean_tex),
+            "--pdf",
+            str(pdf_40),
+            "--body-start-page",
+            "3",
+            "--max-pages",
+            "3",
+            "--max-appendix-pages",
+            "20",
+        )
+        self.assertEqual(res_body_over.returncode, 2)
+        self.assertIn("PDF_OVER_PAGE_LIMIT", res_body_over.stdout)
+        self.assertIn("PDF_APPENDIX_OVER_LIMIT", res_body_over.stdout)
+
+        # Unrendered LaTeX inside BODY page MUST still hard-fail even with appendix exemption active
+        doc_bad_body = fitz.open()
+        doc_bad_body.new_page().insert_text((72, 100), "Summary")
+        doc_bad_body.new_page().insert_text((72, 100), "Contents")
+        doc_bad_body.new_page().insert_text((72, 100), r"Body leak x \in\mathcal{I} here.")
+        bad_body_pdf = paper_dir / "bad_body.pdf"
+        doc_bad_body.save(str(bad_body_pdf))
+        doc_bad_body.close()
+        res_bad_body = run_py(
+            AUDIT_SCRIPT,
+            str(clean_tex),
+            "--pdf",
+            str(bad_body_pdf),
+            "--body-start-page",
+            "3",
+            "--max-pages",
+            "10",
+        )
+        self.assertEqual(res_bad_body.returncode, 2)
+        self.assertIn("PDF_UNRENDERED_LATEX", res_bad_body.stdout)
+
+        # 2. Substantive Stage 2 signals on a full-length manuscript (.tex) vs. polished counterpart
+        filler_para = " ".join(["acoustic propagation and behavioral response dynamics across marine habitats"] * 60)
+        bad_tex = paper_dir / "bad_substantive.tex"
+        bad_tex.write_text(
+            "\\documentclass{article}\n\\begin{document}\n"
+            "\\begin{abstract}\n"
+            "In a 2\\times2 factorial design, Holm adjustment yields p=0.013. Nested LOO-45 bootstrap "
+            "gives OOF NLL 1.31. Under the assumed masking function, V12/B500 is a candidate for field testing.\n"
+            "\\end{abstract}\n"
+            "\\section{Task 1: Acoustic Model}\n"
+            f"{filler_para}\n"
+            "\\section{Task 2: Propagation Model}\n"
+            f"{filler_para}\n"
+            "\\section{Task 3: Policy Optimization}\n"
+            "Using the assumed masking function and illustrative weights, we evaluate:\n"
+            "\\begin{equation}\n"
+            "\\eta(V,B) = 0.2412 (V/18)^{1.835} \\exp(-(B-100)/700.5).\n"
+            "\\end{equation}\n"
+            f"{filler_para}\n"
+            "\\appendix\n\\section{Appendix}\n"
+            "\\lstinputlisting{build_report.py}\n"
+            "\\end{document}\n",
+            encoding="utf-8",
+        )
+        res_subst_bad = run_py(AUDIT_SCRIPT, str(bad_tex))
+        self.assertEqual(res_subst_bad.returncode, 0, res_subst_bad.stdout)
+        self.assertIn("ABSTRACT_AUDIT_CLUTTER", res_subst_bad.stdout)
+        self.assertIn("THIN_MATH_DERIVATION", res_subst_bad.stdout)
+        self.assertIn("UNGROUNDED_PARAM_WEIGHT", res_subst_bad.stdout)
+        self.assertIn("APPENDIX_BOILERPLATE_CODE", res_subst_bad.stdout)
+
+        # Polished manuscript: clean 4-beat abstract, >=6 display equations covering modeling sections,
+        # calibrated/cited equations, and core modeling script only in appendix -> CLEAN
+        eq_block = lambda idx: (
+            f"\\begin{{equation}}\ny_{{{idx}}} = \\alpha_{{{idx}}} x_{{{idx}}} + \\beta_{{{idx}}}.\n\\end{{equation}}\n"
+        )
+        good_tex = paper_dir / "good_substantive.tex"
+        good_tex.write_text(
+            "\\documentclass{article}\n\\begin{document}\n"
+            "\\begin{abstract}\n"
+            "Oceanic vessel noise compresses penguin communication corridors by 42\\%. "
+            "Coupling grazing acoustic decay with truncated lognormal latency predicts a 174 m calm effective radius "
+            "that preserves 89.8\\% active corridor area under a 12 kn speed cap and 500 m setback.\n"
+            "\\end{abstract}\n"
+            "\\section{Task 1: Acoustic Model}\n"
+            f"{filler_para}\n{eq_block(1)}{eq_block(2)}"
+            "\\section{Task 2: Propagation Model}\n"
+            f"{filler_para}\n{eq_block(3)}{eq_block(4)}"
+            "\\section{Task 3: Policy Optimization}\n"
+            "Fitted via maximum likelihood and calibrated in Table 1 \\cite{ref1}:\n"
+            "\\begin{equation}\n"
+            "\\eta(V,B) = 0.2412 (V/18)^{1.835} \\exp(-(B-100)/700.5).\n"
+            "\\end{equation}\n"
+            f"{filler_para}\n{eq_block(5)}"
+            "\\appendix\n\\section{Appendix}\n"
+            "\\lstinputlisting{../02_src/run_experiments.py}\n"
+            "\\end{document}\n",
+            encoding="utf-8",
+        )
+        res_subst_ok = run_py(AUDIT_SCRIPT, str(good_tex))
+        self.assertEqual(res_subst_ok.returncode, 0, res_subst_ok.stdout)
+        self.assertIn("CLEAN (0 prose/substantive triggers", res_subst_ok.stdout)
+
+        # 3. Multi-line AST zip(..., strict=True) verifier check
+        verify_py = src_dir / "verify_multi.py"
+        verify_py.write_text(
+            "def chk(a, b):\n"
+            "    for x, y in enumerate(\n"
+            "        zip(a, b)\n"
+            "    ):\n"
+            "        assert x >= 0 and y == y\n",
+            encoding="utf-8",
+        )
+        res_zip_warn = run_py(AUDIT_SCRIPT, str(good_tex), "--src-dir", str(src_dir))
+        self.assertEqual(res_zip_warn.returncode, 0)
+        self.assertIn("SRC_UNSAFE_ZIP_COMPARE", res_zip_warn.stdout)
+
+        verify_py.write_text(
+            "def chk(a, b):\n"
+            "    for x, y in enumerate(\n"
+            "        zip(a, b, strict=True)\n"
+            "    ):\n"
+            "        assert x >= 0 and y == y\n",
+            encoding="utf-8",
+        )
+        res_zip_ok = run_py(AUDIT_SCRIPT, str(good_tex), "--src-dir", str(src_dir))
+        self.assertEqual(res_zip_ok.returncode, 0)
+        self.assertNotIn("SRC_UNSAFE_ZIP_COMPARE", res_zip_ok.stdout)
+
+        # 4. plot_style.py monochrome palette + legend-on-text collision check
+        sys.path.insert(0, str(SCRIPTS_DIR))
+        try:
+            import plot_style as ps
+        finally:
+            if str(SCRIPTS_DIR) in sys.path:
+                sys.path.remove(str(SCRIPTS_DIR))
+
+        self.assertEqual(ps.DOCUMENT_PALETTE_MONOCHROME["heading"], "#000000")
+        self.assertEqual(ps.DOCUMENT_PALETTE_MONOCHROME["surface"], "#FFFFFF")
+        fig_leg, ax_leg = ps.create_journal_fig(1, 1, width="single", height=2.2)
+        ax_leg.plot([0, 1], [0, 1], label="Series A")
+        ax_leg.legend(loc="upper left")
+        ax_leg.text(0.05, 0.92, "Colliding Legend Label", transform=ax_leg.transAxes)
+        warns_leg = ps.check_figure_layout(fig_leg)
+        ps.plt.close(fig_leg)
+        self.assertTrue(any("Legend" in w for w in warns_leg), f"Expected legend overlap warning, got: {warns_leg}")
 
 
 if __name__ == "__main__":

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Deterministic Stage 1 (Hard Compliance), Section-Aware Stage 2 (Defensive /
-AI-Slop / Cheap-Table Signals), PDF Page Renderer & Full Math-Token Scanner,
-Field-by-Field 00_plan.md Live-Rule & Page-Limit Gate, Cross-Artifact Freshness
-& Orphan-Table Guard, Deliverable CSV/HTML Payload Auditor, and O(1) `handoff.md`
-Relay Validator (v1.6).
+Deterministic Stage 1 (Hard Compliance), Section-Aware & Substantive Stage 2
+(Abstract Tension, Body Math Depth, Parameter Provenance, Appendix Conciseness,
+Defensive / AI-Slop / Cheap-Table Signals), PDF Page Renderer & Full Math-Token
+Scanner, Body-vs-Appendix Page-Limit Gate, Field-by-Field 00_plan.md Live-Rule
+Gate, Cross-Artifact Freshness & Orphan-Table Guard, Deliverable CSV/HTML Payload
+Auditor, and O(1) `handoff.md` Relay Validator (v2.0).
 
 Exit code:
   0 = Stage 1 / Handoff / Plan checks PASS
@@ -15,6 +16,7 @@ Exit code:
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
 import hashlib
 import json
@@ -440,6 +442,300 @@ def scan_stage2_section_aware(
     return hits, suppressed
 
 
+def check_stage2_substantive_quality(
+    files: List[Path],
+) -> Tuple[List[Tuple[str, int, str, str, str]], List[str]]:
+    """
+    Stage 2 substantive academic-craft checks (non-blocking signals for surgical polish):
+    - [ABSTRACT_AUDIT_CLUTTER] / [ABSTRACT_NO_QUANT]: micro-audit jargon clutter or missing metrics in Abstract.
+    - [THIN_MATH_DERIVATION]: full-length modeling paper with too few display derivations or 0-eq modeling sections.
+    - [UNGROUNDED_PARAM_WEIGHT]: heuristic/assumed weight or parameter prose, or multi-constant formulas lacking cite/calibration.
+    - [APPENDIX_BOILERPLATE_CODE]: non-modeling plumbing scripts included in the manuscript appendix.
+    """
+    signals: List[Tuple[str, int, str, str, str]] = []
+    info_lines: List[str] = []
+
+    abstract_clutter_rx = re.compile(
+        r"(?:\bLOO[-_\s]|\bleave-one-|2\s*(?:\\times|×|x)\s*2|\bnested\b|\bHolm\b|p_\{\\mathrm\{Holm|"
+        r"\bbootstrap\b|\bout-of-fold\b|\bOOF\b|\bassumed\s+(?:[a-z]+\s+){0,3}functions?\b|"
+        r"\bcandidate for field testing\b|\btamper\b|\bprobes?\b|\bbyte-identical\b|"
+        r"\bcold-start\b|\bSHA-256\b|篡改|探针|逐字节|冷启动|留一|自助法|假定(?:掩蔽|负担|权重|衰减)?函数)",
+        re.IGNORECASE,
+    )
+    ungrounded_prose_rx = re.compile(
+        r"(?:\bassumed\s+(?:[a-z]+\s+){0,3}(?:masking|burden|cost|weight|decay|penalty|utility)\s+functions?\b|"
+        r"\billustrative\s+(?:weight|parameter|burden|policy\s+function)\b|"
+        r"\bprescribed\s+scenarios?\b|\barbitrary\s+weights?\b|\bchosen\s+heuristically\b|"
+        r"\bfor\s+simplicity,?\s+we\s+set\s+(?:the\s+)?weights?\b|"
+        r"主观设定(?:权重|参数)|人为设定(?:权重|参数)|拍脑袋|假定(?:掩蔽|负担|权重|衰减)函数)",
+        re.IGNORECASE,
+    )
+    boilerplate_code_rx = re.compile(
+        r"\b(build_report\.py|build_ai_statement\.py|package_support\.py|plot_style\.py|audit_paper\.py|sync_metrics\.py|init_project\.py)\b",
+        re.IGNORECASE,
+    )
+    non_modeling_sec_rx = re.compile(
+        r"(?:intro|restatement|background|overview|assumption|notation|nomenclature|sensitivity|"
+        r"evaluation|validation|strength|weakness|limitation|extension|conclusion|reference|appendix|"
+        r"abstract|summary|contents|摘要|引言|背景|重述|假设|符号|灵敏度|检验|评价|优缺点|局限|结论|参考|附录|目录)",
+        re.IGNORECASE,
+    )
+    core_modeling_sec_rx = re.compile(
+        r"(?:task|problem|model|method|formulation|analysis|algorithm|mechanism|optimization|"
+        r"问题|模型|方法|算法|推导|机制|优化)",
+        re.IGNORECASE,
+    )
+    cite_or_calib_rx = re.compile(
+        r"(?:\\cite\{|\[\d+\]|fitted|estimated|calibrat|CRITIC|entropy|AHP|MLE|OLS|regression|derived|"
+        r"law|Table|拟合|估计|标定|熵权|层次分析|推导|文献)",
+        re.IGNORECASE,
+    )
+    trivial_decimals = {"0.0", "0.5", "1.0", "2.0", "0.50", "1.00", "2.00"}
+    disp_start_rx = re.compile(r"\\begin\{(?:equation|align|gather|multline|eqnarray)\*?\}|\\\[|\$\$")
+    disp_end_rx = re.compile(r"\\end\{(?:equation|align|gather|multline|eqnarray)\*?\}|\\\]|\$\$")
+    appendix_start_rx = re.compile(
+        r"(?:\\appendix\b|\\(?:sub)?section\*?\{(?:Appendix|附录)\b|^\s{0,3}#{1,2}\s+(?:Appendix|附录)\b)",
+        re.IGNORECASE,
+    )
+
+    for path in files:
+        if (
+            path.name == "generated_metrics.tex"
+            or "generated_tables" in path.parts
+            or "作品说明单" in path.name
+            or "协作记录" in path.name
+        ):
+            continue
+
+        raw_text = path.read_text(encoding="utf-8", errors="replace")
+        lines = raw_text.splitlines()
+        is_tex = path.suffix.lower() == ".tex"
+        has_begin_doc = is_tex and any(r"\begin{document}" in ln for ln in lines)
+
+        # 1. Extract Abstract text (TeX or Markdown)
+        abs_lines: List[Tuple[int, str]] = []
+        if is_tex:
+            in_abs = False
+            for lineno, line in enumerate(lines, start=1):
+                if r"\begin{abstract}" in line:
+                    in_abs = True
+                    continue
+                if r"\end{abstract}" in line:
+                    break
+                if in_abs and not line.lstrip().startswith("%"):
+                    abs_lines.append((lineno, line))
+        else:
+            in_abs = False
+            for lineno, line in enumerate(lines, start=1):
+                if re.match(r"^\s{0,3}#{1,2}\s+(?:Abstract|Summary|摘要)\b", line, re.IGNORECASE):
+                    in_abs = True
+                    continue
+                if in_abs and re.match(r"^\s{0,3}#{1,2}\s+", line):
+                    break
+                if in_abs:
+                    abs_lines.append((lineno, line))
+
+        if abs_lines:
+            abs_text = "\n".join(ln for _, ln in abs_lines)
+            abs_start = abs_lines[0][0]
+            clutter_matches = abstract_clutter_rx.findall(abs_text)
+            en_words_abs = len(re.findall(r"\b[A-Za-z]{2,}\b", abs_text))
+            cjk_chars_abs = len(re.findall(r"[\u4e00-\u9fff]", abs_text))
+            num_tokens_abs = len(re.findall(r"\d+(?:\.\d+)?%?", abs_text))
+            if len(clutter_matches) >= 3:
+                uniq = ", ".join(dict.fromkeys(m.strip() for m in clutter_matches[:5]))
+                signals.append(
+                    (
+                        path.name,
+                        abs_start,
+                        "ABSTRACT_AUDIT_CLUTTER",
+                        f"{len(clutter_matches)} audit-log clutter cues ({uniq})",
+                        "Abstract reads like a verification audit log; elevate to 4-beat narrative (Hook -> Mechanistic Thesis -> Robustness Envelope -> Action) and move micro-caveats to Evaluation/Limitations",
+                    )
+                )
+            if (en_words_abs >= 80 or cjk_chars_abs >= 150) and num_tokens_abs < 2:
+                signals.append(
+                    (
+                        path.name,
+                        abs_start,
+                        "ABSTRACT_NO_QUANT",
+                        f"only {num_tokens_abs} numeric token(s) in {en_words_abs}w/{cjk_chars_abs}c abstract",
+                        "Quantify Abstract claims with headline metrics, effect sizes, or confidence bounds",
+                    )
+                )
+
+        # 2. Walk body vs. appendix for equation thickness, parameter provenance, and appendix boilerplate
+        in_body = not has_begin_doc
+        in_code_env = False
+        in_md_fence = False
+        in_appendix = False
+        in_limitation = False
+        in_display = False
+        disp_lines: List[Tuple[int, str]] = []
+        body_word_count = 0
+        body_cjk_count = 0
+        total_body_eqs = 0
+        current_sec: Optional[str] = None
+        sec_eqs: List[Tuple[str, int, int]] = []
+        sec_eq_map: Dict[str, int] = {}
+        seen_boilerplate: Set[str] = set()
+
+        for lineno, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            if has_begin_doc and not in_body:
+                if r"\begin{document}" in line:
+                    in_body = True
+                continue
+            if is_tex and stripped.startswith("%"):
+                continue
+            if is_tex:
+                if CODE_ENV_START_RX.search(line):
+                    in_code_env = True
+                    continue
+                if in_code_env:
+                    if CODE_ENV_END_RX.search(line):
+                        in_code_env = False
+                    continue
+            else:
+                if stripped.startswith("```") or stripped.startswith("~~~"):
+                    in_md_fence = not in_md_fence
+                    continue
+                if in_md_fence:
+                    continue
+
+            if not in_appendix and appendix_start_rx.search(line):
+                in_appendix = True
+                continue
+
+            if in_appendix:
+                for m_bp in boilerplate_code_rx.finditer(line):
+                    fname = m_bp.group(1)
+                    if fname.lower() not in seen_boilerplate:
+                        seen_boilerplate.add(fname.lower())
+                        signals.append(
+                            (
+                                path.name,
+                                lineno,
+                                "APPENDIX_BOILERPLATE_CODE",
+                                fname,
+                                f"Non-modeling plumbing script '{fname}' listed in appendix; ship in Support ZIP instead of PDF appendix",
+                            )
+                        )
+                continue
+
+            # Skip abstract lines for body derivation thickness
+            if abs_lines and abs_lines[0][0] <= lineno <= abs_lines[-1][0]:
+                continue
+
+            sec_m = TEX_SECTION_RX.search(line) if is_tex else MD_SECTION_RX.match(line)
+            if sec_m:
+                title = sec_m.group(1).strip()
+                is_top = (not is_tex and line.lstrip().startswith("# ") or line.lstrip().startswith("## ")) or (
+                    is_tex and r"\section" in line
+                )
+                if is_top:
+                    current_sec = title
+                    sec_eq_map.setdefault(title, 0)
+                    sec_eqs.append((title, lineno, 0))
+                in_limitation = bool(LIMITATION_SECTION_RX.search(title))
+
+            body_word_count += len(re.findall(r"\b[A-Za-z]{2,}\b", stripped))
+            body_cjk_count += len(re.findall(r"[\u4e00-\u9fff]", stripped))
+
+            # Display equation tracking
+            if not in_display and disp_start_rx.search(line):
+                total_body_eqs += 1
+                if current_sec:
+                    sec_eq_map[current_sec] = sec_eq_map.get(current_sec, 0) + 1
+                # Single-line \[ ... \] or $$ ... $$
+                if (r"\[" in line and r"\]" in line) or (line.count("$$") >= 2) or (r"\end{" in line):
+                    disp_lines = [(lineno, line)]
+                    in_display = False
+                    # Check magic constants right here
+                    dec_consts = [c for c in re.findall(r"\b\d+\.\d+\b", line) if c not in trivial_decimals]
+                    if len(dec_consts) >= 3 and not in_limitation:
+                        ctx = "\n".join(lines[max(0, lineno - 6): min(len(lines), lineno + 5)])
+                        if not cite_or_calib_rx.search(ctx):
+                            signals.append(
+                                (
+                                    path.name,
+                                    lineno,
+                                    "UNGROUNDED_PARAM_WEIGHT",
+                                    f"{len(dec_consts)} uncalibrated constants ({', '.join(dec_consts[:4])})",
+                                    "Display equation has >=3 magic decimal constants without nearby literature \\cite{...} or calibration note",
+                                )
+                            )
+                    disp_lines = []
+                else:
+                    in_display = True
+                    disp_lines = [(lineno, line)]
+                continue
+
+            if in_display:
+                disp_lines.append((lineno, line))
+                if disp_end_rx.search(line):
+                    eq_start = disp_lines[0][0]
+                    eq_end = lineno
+                    eq_body = "\n".join(ln for _, ln in disp_lines)
+                    dec_consts = [c for c in re.findall(r"\b\d+\.\d+\b", eq_body) if c not in trivial_decimals]
+                    if len(dec_consts) >= 3 and not in_limitation:
+                        ctx = "\n".join(lines[max(0, eq_start - 6): min(len(lines), eq_end + 5)])
+                        if not cite_or_calib_rx.search(ctx):
+                            signals.append(
+                                (
+                                    path.name,
+                                    eq_start,
+                                    "UNGROUNDED_PARAM_WEIGHT",
+                                    f"{len(dec_consts)} uncalibrated constants ({', '.join(dec_consts[:4])})",
+                                    "Display equation has >=3 magic decimal constants without nearby literature \\cite{...} or calibration note",
+                                )
+                            )
+                    in_display = False
+                    disp_lines = []
+                continue
+
+            if not in_limitation:
+                m_ug = ungrounded_prose_rx.search(line)
+                if m_ug:
+                    snippet = stripped if len(stripped) <= 110 else stripped[:107] + "..."
+                    signals.append(
+                        (
+                            path.name,
+                            lineno,
+                            "UNGROUNDED_PARAM_WEIGHT",
+                            m_ug.group(0),
+                            snippet,
+                        )
+                    )
+
+        if body_word_count >= 1200 or body_cjk_count >= 2500:
+            core_zero_secs = [
+                (title, sln)
+                for title, sln, _ in sec_eqs
+                if core_modeling_sec_rx.search(title)
+                and not non_modeling_sec_rx.search(title)
+                and sec_eq_map.get(title, 0) == 0
+            ]
+            sec_summary = ", ".join(f"{t[:24]}={sec_eq_map.get(t, 0)}" for t, _, _ in sec_eqs)
+            info_lines.append(
+                f"  - Body derivation inventory ({path.name}): {total_body_eqs} display eq(s)"
+                + (f" [{sec_summary}]" if sec_summary else "")
+            )
+            if total_body_eqs < 6 or len(core_zero_secs) >= 2:
+                zero_names = ", ".join(t for t, _ in core_zero_secs[:3]) or "body"
+                signals.append(
+                    (
+                        path.name,
+                        core_zero_secs[0][1] if core_zero_secs else 1,
+                        "THIN_MATH_DERIVATION",
+                        f"{total_body_eqs} display eq(s); 0-eq modeling section(s): {zero_names}",
+                        "Strengthen first-principles derivations, numbered governing equations/objectives, and analytical properties in core modeling sections",
+                    )
+                )
+
+    return signals, info_lines
+
+
 def check_plan_live_rules(plan_path: Optional[Path]) -> Tuple[List[str], List[str]]:
     """
     Strictly validate Section 0 of 00_plan.md field-by-field:
@@ -800,15 +1096,18 @@ def check_pdf_metadata(
     claim_sources: Optional[List[Tuple[str, str]]] = None,
     max_pages: Optional[int] = None,
     max_pages_source: Optional[str] = None,
-) -> Tuple[List[str], List[str], List[str]]:
+    body_start_page: Optional[int] = None,
+    max_appendix_pages: Optional[int] = None,
+) -> Tuple[List[str], List[str], List[str], List[Tuple[str, int, str, str, str]]]:
     if not pdf_path:
-        return [], [], []
+        return [], [], [], []
     if not pdf_path.is_file():
-        return [f"[PDF_MISSING] Specified compiled PDF not found: {pdf_path}"], [], []
+        return [f"[PDF_MISSING] Specified compiled PDF not found: {pdf_path}"], [], [], []
 
     hard_fails: List[str] = []
     warnings: List[str] = []
     info_lines: List[str] = []
+    pdf_s2_signals: List[Tuple[str, int, str, str, str]] = []
     raw = pdf_path.read_bytes()
 
     page_count: Optional[int] = None
@@ -862,7 +1161,7 @@ def check_pdf_metadata(
                     metadata_fields.append(("/" + key.decode(), val))
 
     page_summary = str(page_count) if page_count is not None else "unknown"
-    if max_pages is not None:
+    if max_pages is not None and body_start_page is None:
         page_summary += f" (hard limit <= {max_pages})"
     info_lines.append(f"  - PDF: {pdf_path.name} | Pages: {page_summary}")
     for k, v in metadata_fields:
@@ -900,24 +1199,118 @@ def check_pdf_metadata(
         r"|[∑∏∫]\s*[_^]\{[^}\n]{1,30}\}"
         r"|[A-Za-z0-9\)\]]\^\{[^}\n]{1,30}\}"
     )
+    contents_heading_rx = re.compile(r"(?:table of )?contents|目录", re.IGNORECASE)
+    appendix_heading_rx = re.compile(
+        r"(?im)^[ \t]*(?:(?:\d+\s+)?Appendix(?:[ \t]+[A-Z])?|附录(?:[ \t]*[A-Z0-9一二三四五])?)[ \t]*$"
+    )
+    code_appendix_heading_rx = re.compile(
+        r"(?im)^[ \t]*(?:A\.\d+[ \t]+|Appendix[ \t]+(?:[A-Z0-9]+[ \t]*[:.\-]?[ \t]+)?|附录[ \t]*[A-Z0-9一二三四五]?[ \t]*[:.\-]?[ \t]*)"
+        r"(?:(?:Complete[ \t]+)?(?:[A-Za-z]+[ \t]+)?(?:Source|Code)[ \t]+Listings?|源程序|代码清单)[ \t]*$"
+    )
+    code_listing_start_rx = re.compile(
+        r"(?im)^[ \t]*(?:(?:[\w.-]+[/\\])*[\w.-]+\.(?:py|r|m|jl|cpp|c|h|java|rs|js|ts)[ \t]*$|#!/)"
+    )
+    boilerplate_code_rx = re.compile(
+        r"\b(build_report\.py|build_ai_statement\.py|package_support\.py|plot_style\.py|audit_paper\.py|sync_metrics\.py|init_project\.py)\b",
+        re.IGNORECASE,
+    )
+    appendix_page: Optional[int] = None
+    seen_code_heading = False
+    in_code_appendix = False
+    code_appendix_exempt_pages = 0
+    seen_boilerplate_files: Set[str] = set()
     for pno, ptext in page_texts:
         if "\ufffd" in ptext:
             hard_fails.append(
                 f"[PDF_TOFU_GLYPH] {pdf_path.name} page {pno} contains replacement character '\\ufffd' (missing font glyph)"
             )
-        m_latex = unrendered_latex_rx.search(ptext)
+        lead_lines = [line.strip() for line in ptext.splitlines() if line.strip()][:8]
+        is_contents = any(contents_heading_rx.fullmatch(line) for line in lead_lines)
+        if not is_contents and appendix_page is None and appendix_heading_rx.search(ptext):
+            appendix_page = pno
+        if appendix_page is not None and pno >= appendix_page and not is_contents:
+            for m_bp in boilerplate_code_rx.finditer(ptext):
+                fname = m_bp.group(1)
+                if fname.lower() not in seen_boilerplate_files:
+                    seen_boilerplate_files.add(fname.lower())
+                    pdf_s2_signals.append(
+                        (
+                            pdf_path.name,
+                            pno,
+                            "APPENDIX_BOILERPLATE_CODE",
+                            fname,
+                            f"Non-modeling plumbing script '{fname}' dumped into PDF appendix; keep in Support ZIP only",
+                        )
+                    )
+        if in_code_appendix and not is_contents:
+            code_appendix_exempt_pages += 1
+            continue
+        scan_text = ptext
+        if not is_contents:
+            heading = code_appendix_heading_rx.search(ptext) if not seen_code_heading else None
+            if heading is not None:
+                seen_code_heading = True
+            if seen_code_heading:
+                listing = code_listing_start_rx.search(ptext, heading.end() if heading else 0)
+                if listing is not None:
+                    scan_text = ptext[:listing.start()]
+                    in_code_appendix = True
+                    code_appendix_exempt_pages += 1
+        m_latex = unrendered_latex_rx.search(scan_text)
         if m_latex:
-            snippet = ptext[max(0, m_latex.start() - 20): min(len(ptext), m_latex.end() + 30)].replace("\n", " ")
+            snippet = scan_text[max(0, m_latex.start() - 20): min(len(scan_text), m_latex.end() + 30)].replace("\n", " ")
             hard_fails.append(
                 f"[PDF_UNRENDERED_LATEX] {pdf_path.name} page {pno} contains raw uncompiled LaTeX '{m_latex.group(0)}' | {snippet}"
             )
+    if code_appendix_exempt_pages > 0:
+        info_lines.append(
+            f"  - Appendix source-listing pages exempted from LaTeX scan: {code_appendix_exempt_pages} page(s) (body & prose formulas still checked)"
+        )
 
     # Verify hard page limit and self-claimed report page counts
     if page_count is not None and page_count > 0:
-        if max_pages is not None and page_count > max_pages:
+        limited_count = page_count
+        limit_scope = "page(s)"
+        body_pages_count: Optional[int] = None
+        appendix_pages_count: Optional[int] = (
+            (page_count - appendix_page + 1) if appendix_page is not None else None
+        )
+        if body_start_page is not None:
+            limit_scope = "body page(s)"
+            if len(page_texts) != page_count or any(not text.strip() for _, text in page_texts):
+                hard_fails.append(f"[PDF_BODY_UNVERIFIED] Could not extract each page of {pdf_path.name}")
+            end_page = appendix_page if appendix_page is not None else page_count + 1
+            limited_count = end_page - body_start_page
+            body_pages_count = limited_count
+            if limited_count < 1:
+                hard_fails.append(f"[PDF_BODY_UNVERIFIED] Invalid body start page {body_start_page} in {pdf_path.name}")
+            info_lines.append(
+                f"  - Main body: {limited_count} page(s) starting at page {body_start_page}"
+                + (f"; appendix starts on page {appendix_page}" if appendix_page is not None else "")
+            )
+        elif appendix_page is not None:
+            body_pages_count = max(1, appendix_page - 1)
+        if appendix_pages_count is not None:
+            info_lines.append(f"  - Appendix: {appendix_pages_count} page(s) (starting page {appendix_page})")
+            if max_appendix_pages is not None and appendix_pages_count > max_appendix_pages:
+                hard_fails.append(
+                    f"[PDF_APPENDIX_OVER_LIMIT] {pdf_path.name} appendix has {appendix_pages_count} page(s), "
+                    f"exceeding limit of {max_appendix_pages} page(s)"
+                )
+            if appendix_pages_count > 30 and body_pages_count and appendix_pages_count > 1.5 * body_pages_count:
+                pdf_s2_signals.append(
+                    (
+                        pdf_path.name,
+                        appendix_page or 1,
+                        "APPENDIX_BLOAT",
+                        f"{appendix_pages_count} appendix pages vs {body_pages_count} body pages",
+                        f"PDF appendix is {appendix_pages_count}p ({appendix_pages_count / body_pages_count:.1f}x body); curate core modeling code only in PDF and ship full repo in Support ZIP (defer to 00_problem/ if official rules mandate verbatim full code in PDF appendix)",
+                    )
+                )
+        if max_pages is not None and limited_count > max_pages:
             src_note = f" ({max_pages_source})" if max_pages_source else ""
             hard_fails.append(
-                f"[PDF_OVER_PAGE_LIMIT] {pdf_path.name} has {page_count} page(s), exceeding hard limit of {max_pages} page(s){src_note}"
+                f"[PDF_OVER_PAGE_LIMIT] {pdf_path.name} has {limited_count} {limit_scope}, exceeding hard limit of {max_pages}{src_note}"
             )
 
         zh_page_claim_rx = re.compile(
@@ -959,7 +1352,7 @@ def check_pdf_metadata(
                     f"(median earlier page: {median_earlier}); check for accidental trailing page spill"
                 )
 
-    return hard_fails, warnings, info_lines
+    return hard_fails, warnings, info_lines, pdf_s2_signals
 
 
 def _sha256_file(path: Path) -> str:
@@ -1070,7 +1463,6 @@ def check_src_paths(
         re.compile(r"open\s*\([^)]*,\s*['\"][wax+]", re.IGNORECASE),
         re.compile(r"(?:os\.remove|os\.unlink|shutil\.move|shutil\.rmtree|\.unlink)\s*\(", re.IGNORECASE),
     ]
-    bare_zip_rx = re.compile(r"\bfor\s+[^:\n]+\s+in\s+(?:enumerate\s*\(\s*)?zip\s*\(([^)]+)\)")
     verifier_name_rx = re.compile(r"(?:audit|verify|check|validate)", re.IGNORECASE)
     os_font_rx = re.compile(
         r"(?:[A-Za-z]:[/\\]+Windows[/\\]+Fonts|WINDIR[^\n]*Fonts|/System/Library/Fonts|/Library/Fonts)",
@@ -1107,11 +1499,23 @@ def check_src_paths(
             if raw_dir_rx.search(line) and any(rx.search(line) for rx in raw_write_rxs):
                 snippet = line.strip()[:110]
                 hits.append((path.name, lineno, "SRC_WRITES_RAW", "01_data/raw or 00_problem write", snippet))
-            if is_verifier:
-                m_zip = bare_zip_rx.search(line)
-                if m_zip and "strict" not in m_zip.group(1):
+        if is_verifier and path.suffix.lower() == ".py":
+            try:
+                tree = ast.parse(text, filename=path.name)
+            except SyntaxError as exc:
+                hits.append((path.name, exc.lineno or 1, "SRC_PYTHON_SYNTAX", exc.msg, ""))
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.For, ast.comprehension)):
+                    continue
+                call = node.iter
+                if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "enumerate" and call.args:
+                    call = call.args[0]
+                if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "zip"):
+                    continue
+                if not any(kw.arg == "strict" and isinstance(kw.value, ast.Constant) and kw.value.value is True for kw in call.keywords):
                     warns.append(
-                        f"[SRC_UNSAFE_ZIP_COMPARE] {path.name}:{lineno} uses bare 'zip(...)' without 'strict=True' or 'zip_longest'; "
+                        f"[SRC_UNSAFE_ZIP_COMPARE] {path.name}:{call.lineno} uses 'zip(...)' without 'strict=True' or 'zip_longest'; "
                         f"trailing extra rows in compared files can be silently ignored"
                     )
 
@@ -1611,6 +2015,18 @@ def main() -> int:
     parser.add_argument("--pdf", type=str, default=None, help="Path to compiled .pdf for metadata/page check")
     parser.add_argument("--max-pages", type=int, default=None, help="Hard upper PDF page limit (overrides 00_plan.md Sec. 0)")
     parser.add_argument(
+        "--body-start-page",
+        type=int,
+        default=None,
+        help="Apply --max-pages from this physical page through the page before the appendix",
+    )
+    parser.add_argument(
+        "--max-appendix-pages",
+        type=int,
+        default=None,
+        help="Optional hard upper page limit for the PDF appendix",
+    )
+    parser.add_argument(
         "--render-pdf",
         nargs="?",
         const="03_outputs/_pdf_previews",
@@ -1659,7 +2075,7 @@ def main() -> int:
     ban_terms = [t.strip() for t in args.ban_terms.split(",") if t.strip()]
     total_hard_fails = 0
     print("=" * 72)
-    print("MATH MODELING FRONTIER AUDIT & RELAY VALIDATOR (v1.6)")
+    print("MATH MODELING FRONTIER AUDIT & RELAY VALIDATOR (v2.0)")
     print("=" * 72)
 
     # ---- OPTIONAL: O(1) HANDOFF RELAY CHECK ----
@@ -1804,12 +2220,14 @@ def main() -> int:
                 max_pages, phrase = extracted
                 max_pages_source = f"00_plan.md Sec. 0: '{phrase}'"
 
-        pdf_fails, pdf_warns, pdf_info = check_pdf_metadata(
+        pdf_fails, pdf_warns, pdf_info, pdf_s2_signals = check_pdf_metadata(
             pdf_path,
             ban_terms,
             claim_sources=claim_sources,
             max_pages=max_pages,
             max_pages_source=max_pages_source,
+            body_start_page=args.body_start_page,
+            max_appendix_pages=args.max_appendix_pages,
         )
 
         render_fails: List[str] = []
@@ -1862,14 +2280,18 @@ def main() -> int:
             print(line)
 
         s2_hits, suppressed = scan_stage2_section_aware(files, DEFENSIVE_PATTERNS + AI_SLOP_PATTERNS)
-        print("\n[STAGE 2 SIGNALS] Section-Aware Defensive (D1-D5), AI-Slop & Cheap Tables")
+        subst_hits, subst_info = check_stage2_substantive_quality(files)
+        all_s2_hits = s2_hits + subst_hits + pdf_s2_signals
+        print("\n[STAGE 2 SIGNALS] Substantive Craft (Abstract/Math/Params/Appendix) & Prose Signals")
+        for s_info in subst_info:
+            print(s_info)
         if suppressed > 0:
             print(f"  (Exempted {suppressed} legitimate D2/D5 match(es) inside dedicated Limitations/AI-Report sections)")
-        if not s2_hits:
-            print("  -> CLEAN (0 prose triggers; still perform semantic Stage 2 audit)")
+        if not all_s2_hits:
+            print("  -> CLEAN (0 prose/substantive triggers; still perform semantic 5-axis Stage 2 audit)")
         else:
-            print(f"  -> Found {len(s2_hits)} signal(s) for surgical review:")
-            for fname, lineno, code, matched, snippet in s2_hits:
+            print(f"  -> Found {len(all_s2_hits)} signal(s) for surgical review:")
+            for fname, lineno, code, matched, snippet in all_s2_hits:
                 print(f"  [SIGNAL][{code}] {fname}:{lineno} matched '{matched}' | {snippet}")
 
     print("\n" + "=" * 72)

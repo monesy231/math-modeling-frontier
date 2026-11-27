@@ -167,8 +167,8 @@ def main() -> int:
 
 ## Active Task (Next Turn Only)
 1. Extract live contest rules from `00_problem/` into `00_plan.md` Sec. 0 (clear all `[EXTRACT FROM 00_problem/]` tags).
-2. Inspect raw data summary in `01_data/raw/` and log statistical premises in `01_log.md`.
-3. Self-play 2–3 distinct paradigms, lock `Q1 -> Qn` spine & Baseline route in `00_plan.md`, then pause at **Gate M**.
+2. Audit `01_data/raw/` columns & supplementary methods (`01_log.md`), and log real domain DOIs/URLs for physics & weights.
+3. Self-play 2–3 paradigms, lock `Q1 -> Qn` **Math Derivation Spine** & **Parameter & Weight Provenance Table** in `00_plan.md`, then pause at **Gate M**.
 
 ## File Pointers (Read On Demand — Never Paste Raw Data Here)
 - Problem & official rules: `00_problem/` ({problem_listing})
@@ -187,35 +187,42 @@ def main() -> int:
 `使用 math-modeling-frontier 执行 MM Step 1`
 """
 
-    plan_md = f"""# 00_plan.md — Canonical Rules, Math Spine, Nomenclature & Gates (Read On Demand)
+    plan_md = f"""# 00_plan.md — Canonical Rules, Prompt Traceability, Math Spine & Gates (Read On Demand)
 
 - **Initialized**: {now_str} | **Contest**: {args.contest} | **Problem**: {args.title} | **Lang**: {args.lang.upper()}
+- **Priority Hierarchy**: `00_problem/ Official Rules & Problem Questions > Explicit Deliverables > Generic Skill Defaults`
 
 ## 0. Live Official Rules (Extracted from `00_problem/` — state concrete rule + source file, or `已核实不适用 (Source: <notice>)`)
-- **Format & Template**: `[EXTRACT FROM 00_problem/]`
+- **Format & Template**: `[EXTRACT FROM 00_problem/]` *(include monochrome/color typography norm if specified)*
 - **Deadline / Window**: `[EXTRACT FROM 00_problem/]`
-- **Hard Page / Word Limit**: `[EXTRACT FROM 00_problem/]` *(note whether embedded companion sheets count toward the cap)*
+- **Hard Page / Word Limit**: `[EXTRACT FROM 00_problem/]` *(separate body vs. appendix cap & whether companion sheets count)*
 - **Anonymity & Metadata**: `[EXTRACT FROM 00_problem/]`
-- **AI Declaration Policy**: `[EXTRACT FROM 00_problem/]`
-- **Required Extras (Memo / Code / Data / Plagiarism / Official Metric Priority & Dual Clocks)**: `[EXTRACT FROM 00_problem/]`
+- **AI Declaration Policy**: `[EXTRACT FROM 00_problem/]` *(standalone AI sheet / human-signature commitment rules)*
+- **Required Extras (Memo / Code / Data / Plagiarism / Support ZIP Exclusions / Dual Clocks)**: `[EXTRACT FROM 00_problem/]`
+
+### Prompt Sub-Question & Requirement Traceability Checklist
+| Prompt Requirement / Sub-Q | Official Deliverable / Metric / Format | Model & Paper Section | Verified? |
+| :--- | :--- | :--- | :--- |
+| Q1: `[EXTRACT FROM 00_problem/]` | | | `PENDING` |
 
 ## 1. Workflow Gate Tracker (Step 0 -> Step 6)
 
 | Step & Gate | Owner | Scope | Status | Evidence Pointer |
 | :--- | :--- | :--- | :--- | :--- |
 | **Step 0 · Setup** | `[W]` | Workspace + live rules from `00_problem/` | `IN_PROGRESS` | `00_plan.md` |
-| **Step 1 · Gate M** | `[F]` | Track choice, EDA, 2–3 paradigm self-play, HIL sign-off | `PENDING` | `00_plan.md`, `01_log.md` |
+| **Step 1 · Gate M** | `[F]` | Track choice, EDA, derivation spine, parameter provenance, HIL | `PENDING` | `00_plan.md`, `01_log.md` |
 | **Step 2 · Gate P1** | `[W]` | Reproducible cleaning + full `Q1->Qn` Baseline + commit | `PENDING` | `03_outputs/metrics/baseline.json` |
-| **Step 3 · Gate P2** | `[W]` | Upgrades, comparison, sensitivity, verified visuals + commit | `PENDING` | `03_outputs/metrics/`, `figs/` |
-| **Step 4 · Gate R** | `[F]` | **Pre-Writing Technical Audit** (math/physics/metrics pass) | `PENDING` | `handoff.md` |
-| **Step 5 · W-Draft** | `[W/F]` | Isolated press-conference draft + compiled PDF | `PENDING` | `04_paper/` |
-| **Step 6 · W-Audit** | `[F]` | Independent read-only Stage 1 + Stage 2 audit + seal | `PENDING` | Audit report |
+| **Step 3 · Gate P2** | `[W]` | Matched-protocol upgrades, ablations, sensitivity, visuals + commit | `PENDING` | `03_outputs/metrics/`, `figs/` |
+| **Step 4 · Gate R** | `[F]` | **Pre-Writing Technical & Math Audit** (substance + fidelity) | `PENDING` | `handoff.md` |
+| **Step 5 · W-Draft** | `[W/F]` | Isolated press-conference draft + lean curated appendix + PDF | `PENDING` | `04_paper/` |
+| **Step 6 · W-Audit** | `[F]` | Independent read-only Stage 1 + 5-axis Stage 2 audit + seal | `PENDING` | Audit report |
 
-## 2. Coherent `Q1 -> Qn` Math Spine, Cohort Accounting & Baseline Route
-- **Q1**: [Core white-box mechanism & state variables]
-- **Q2**: [Coupled / upgraded formulation inheriting Q1]
+## 2. Coherent `Q1 -> Qn` Math Derivation Spine, Cohort Accounting & Baseline Route
+- **Q1**: [First-principles governing equations, likelihood/objective & analytical properties]
+- **Q2**: [Coupled / upgraded formulation inheriting Q1 + identifiability checks]
 - **Q3**: [Stochastic / sensitivity / policy extension]
-- **Cohort, Precision & Causality Contract**: [Item cohort vs. entity cohort + fixed denominators; cross-period carryover conservation; exact integer-scaled units if decimals are fixed; causal decision-time estimates vs. post-hoc settlement parameters]
+- **Cross-Task Shared Interfaces & Single-Source Tuned Config**: [Shared occurrence probabilities / parameters across tasks; single config source propagated to all resamples]
+- **Cohort, Precision & Causality Contract**: [Item vs. entity cohort + fixed denominators; carryover conservation; integer-scaled units; causal decision-time vs. post-hoc parameters]
 - **Global Baseline Path (Gate P1)**: [Minimal end-to-end `Q1 -> Qn` script chain + independent raw-input `verify.py`]
 
 ## 3. Actor-Critic Paradigm Trade-Off
@@ -225,10 +232,14 @@ def main() -> int:
 | B | | | |
 | C | | | |
 
-## 4. Operational Assumptions & Unified Nomenclature
+## 4. Operational Assumptions, Parameter Provenance & Unified Nomenclature
 | ID | Assumption + Justification | Eq. Hook | Relaxation / Sensitivity Test |
 | :--- | :--- | :--- | :--- |
 | A1 | | | |
+
+| Param / Weight | Value / Form | Tier (`Data` / `Physics-Lit` / `Scenario`) | Source / Calibration (`01_log.md` DOI/CV) | Sensitivity Sweep |
+| :--- | :--- | :--- | :--- | :--- |
+| $w_1$ | | | | |
 
 | Symbol | Definition | Unit / Domain | First Used |
 | :--- | :--- | :--- | :--- |
